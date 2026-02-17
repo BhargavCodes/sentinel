@@ -1,0 +1,18 @@
+# Secrets (NEVER UPLOAD THESE)
+.env
+
+# Python System Files
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# models/
+
+# IDE Files
+.vscode/
+.idea/
+
+# Node Modules (Frontend)
+frontend/node_modules/
+frontend/dist/
