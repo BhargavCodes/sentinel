@@ -8,24 +8,6 @@ Here is the exact guide you should include as a `README.md` file in your reposit
 
 ---
 
-### **Create a `README.md` file**
-
-Create a file named `README.md` in your root folder (`X:\Nerd\disaster_system\`) and paste this content:
-
-```markdown
-# Sentinel Disaster Management System 🌍🔥
-
-A full-stack disaster monitoring dashboard featuring real-time satellite weather, AI-powered fire detection, seismic risk analysis, and government-grade air quality monitoring.
-
-## 🚀 Key Features
-* **Live Weather & Maps:** Interactive Leaflet maps with Rain, Cloud, and Wind layers.
-* **AI Fire Detection:** Custom MobileNetV2 Transfer Learning model to detect fire from aerial/drone imagery (filtering out false positives like red leaves).
-* **Seismic Analysis:** Real-time earthquake data fetching (USGS) with proximity alerts.
-* **Smart AQI:** Accurate Air Quality Index fetching using geo-location and distance validation (prevents incorrect city matching).
-* **Alert System:** Automated Email & SMS alerts for critical events (Fire/Earthquake).
-
----
-
 ## 🛠️ Installation Guide
 
 Follow these steps to run the project locally.
