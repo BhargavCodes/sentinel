@@ -1,22 +1,11 @@
 // Landing.jsx — Sentinel  |  Enterprise Disaster Command Platform
 //
-// Theme:  "Military-Grade Enterprise" — Palantir / FEMA aesthetic.
-//         Deep navy-slate backgrounds. Crimson alerts. Amber warnings.
-//         Teal operational accents. Safe green. Zero neon. Zero cyberpunk.
-//
-// Powered by Framer Motion — purposeful, smooth, authoritative animations.
-// No glitch effects. Every motion justifies its existence.
-//
-// Sections:
-//   1. Top Nav (sticky, auth-aware)
-//   2. Hero  — staggered headline, stat row, CTA buttons + "View Live Metrics"
-//   3. Ticker — scrolling system status marquee
-//   4. Tech Stack — MobileNetV2 · OpenCV · FastAPI · Supabase callouts
-//   5. Capability Matrix — six feature cards with tech tags
-//   6. Threat Pipeline — animated 4-step detection-to-dispatch diagram
-//   7. Live System Status — floating card with pulsing indicators
-//   8. Final CTA
-//   9. Footer
+// v2 Updates:
+//   - TopNav: smooth-scroll anchor links, logo scrolls to top,
+//     auth-aware user dropdown (Profile / Dashboard / Logout)
+//   - Hero: auth-aware CTAs, "Welcome back" greeting for logged-in users
+//   - Final CTA: auth-aware buttons, removes Sign In when logged in
+//   - Section id anchors: tech-stack, capabilities, architecture, status
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate }                         from "react-router-dom";
@@ -30,7 +19,7 @@ import {
 import { useAuth } from "./App";
 
 // ─────────────────────────────────────────────────────────────
-// DESIGN TOKENS (mirrors App.jsx)
+// DESIGN TOKENS
 // ─────────────────────────────────────────────────────────────
 const T = {
   crimson: "#E63946",
@@ -186,6 +175,18 @@ const staggerFast = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// SMOOTH SCROLL HELPER
+// ─────────────────────────────────────────────────────────────
+function scrollToId(id) {
+  if (id === "top") {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ─────────────────────────────────────────────────────────────
 // ROOT COMPONENT
 // ─────────────────────────────────────────────────────────────
 export default function Landing() {
@@ -242,11 +243,9 @@ export default function Landing() {
         if (d.y < 0) d.y = H(); if (d.y > H()) d.y = 0;
         ctx.beginPath();
         ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-        // Enterprise teal dots instead of neon green
         ctx.fillStyle = `rgba(69,123,157,${d.alpha})`;
         ctx.fill();
       });
-      // Connection lines — muted
       for (let i = 0; i < dots.length; i++) {
         for (let j = i + 1; j < dots.length; j++) {
           const dx = dots[i].x - dots[j].x;
@@ -295,7 +294,7 @@ export default function Landing() {
           pointerEvents: "none",
         }} />
 
-        {/* Radial glows — enterprise teal/crimson, very subtle */}
+        {/* Radial glows */}
         <motion.div style={{
           position: "absolute", top: "25%", left: "50%",
           translateX: "-50%", translateY: "-50%",
@@ -328,7 +327,7 @@ export default function Landing() {
               border: `1px solid ${T.borderH}`,
               borderRadius: 99,
               padding: "6px 16px 6px 10px",
-              marginBottom: 36,
+              marginBottom: 20,
             }}
           >
             <LivePulse color={T.green} />
@@ -340,14 +339,40 @@ export default function Landing() {
             </span>
           </motion.div>
 
-          {/* Headline — staggered words */}
+          {/* ── AUTH-AWARE: Welcome back greeting ── */}
+          <AnimatePresence>
+            {user && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: 8, marginBottom: 18,
+                }}
+              >
+                <div style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: T.green, boxShadow: `0 0 6px ${T.green}`,
+                }} />
+                <span style={{
+                  fontFamily: "'Space Mono', monospace", fontSize: 10,
+                  letterSpacing: 2, color: T.green, textTransform: "uppercase",
+                }}>
+                  Welcome back, {user.name}
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Headline */}
           <motion.div
             variants={stagger}
             initial="hidden"
             animate="show"
             style={{ marginBottom: 10 }}
           >
-            {/* Line 1 — solid text */}
             <div style={{
               fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
               fontSize: "clamp(2.6rem, 6vw, 5rem)",
@@ -357,16 +382,11 @@ export default function Landing() {
               marginBottom: "0.06em",
             }}>
               {["Disaster", "Response"].map((w) => (
-                <motion.span
-                  key={w}
-                  variants={fadeUp}
-                  style={{ display: "inline-block", color: T.text }}
-                >
+                <motion.span key={w} variants={fadeUp} style={{ display: "inline-block", color: T.text }}>
                   {w}
                 </motion.span>
               ))}
             </div>
-            {/* Line 2 — outlined + crimson stroke */}
             <div style={{
               fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
               fontSize: "clamp(2.6rem, 6vw, 5rem)",
@@ -405,35 +425,51 @@ export default function Landing() {
             citizen alerts — built for India's emergency response operators.
           </motion.p>
 
-          {/* CTA buttons */}
+          {/* ── AUTH-AWARE CTA BUTTONS ── */}
           <motion.div
             initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.65, duration: 0.55 }}
             style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}
           >
-            <motion.button
-              className="s-btn s-btn-primary"
-              style={{ padding: "13px 36px", fontSize: 14, position: "relative", overflow: "hidden" }}
-              onClick={() => navigate("/register")}
-              whileHover={{ scale: 1.04 }}
-              whileTap={{ scale: 0.97 }}
-            >
-              <ShimmerOverlay />
-              Deploy Now →
-            </motion.button>
+            {user ? (
+              /* Logged-in state: Dashboard CTA only (no Login button) */
+              <motion.button
+                className="s-btn s-btn-primary"
+                style={{ padding: "13px 36px", fontSize: 14, position: "relative", overflow: "hidden" }}
+                onClick={() => navigate("/dashboard")}
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.97 }}
+              >
+                <ShimmerOverlay />
+                Go to Command Dashboard →
+              </motion.button>
+            ) : (
+              /* Guest state: Register + Login */
+              <>
+                <motion.button
+                  className="s-btn s-btn-primary"
+                  style={{ padding: "13px 36px", fontSize: 14, position: "relative", overflow: "hidden" }}
+                  onClick={() => navigate("/register")}
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.97 }}
+                >
+                  <ShimmerOverlay />
+                  Deploy Now →
+                </motion.button>
+                <motion.button
+                  className="s-btn s-btn-ghost"
+                  style={{ padding: "13px 32px", fontSize: 14 }}
+                  onClick={() => navigate("/login")}
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                >
+                  Operator Login
+                </motion.button>
+              </>
+            )}
 
-            <motion.button
-              className="s-btn s-btn-ghost"
-              style={{ padding: "13px 32px", fontSize: 14 }}
-              onClick={() => navigate("/login")}
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-            >
-              Operator Login
-            </motion.button>
-
-            {/* ── PUBLIC ANALYTICS BUTTON ── required by spec */}
+            {/* Metrics — always visible */}
             <motion.button
               style={{
                 padding: "13px 28px", fontSize: 13,
@@ -461,10 +497,10 @@ export default function Landing() {
             variants={stagger}
             initial="hidden"
             animate="show"
-            transition={{ delayChildren: 0.9 }}
             style={{
-              display: "flex", marginTop: 64,
-              justifyContent: "center", flexWrap: "wrap",
+              display: "flex", flexWrap: "wrap",
+              justifyContent: "center",
+              marginTop: 52,
               borderTop: `1px solid ${T.border}`,
               borderBottom: `1px solid ${T.border}`,
             }}
@@ -504,20 +540,20 @@ export default function Landing() {
       {/* ══ TICKER ══ */}
       <StatusTicker />
 
-      {/* ══ TECH STACK ══ */}
+      {/* ══ TECH STACK ══ — id anchor */}
       <TechStackSection />
 
-      {/* ══ CAPABILITY MATRIX ══ */}
-      <CapabilityMatrix navigate={navigate} />
+      {/* ══ CAPABILITY MATRIX ══ — id anchor */}
+      <CapabilityMatrix navigate={navigate} user={user} />
 
-      {/* ══ PIPELINE ══ */}
+      {/* ══ PIPELINE ══ — id anchor */}
       <ThreatPipeline />
 
-      {/* ══ LIVE STATUS WIDGET ══ */}
+      {/* ══ LIVE STATUS ══ — id anchor */}
       <LiveStatusSection />
 
       {/* ══ FINAL CTA ══ */}
-      <FinalCTA navigate={navigate} />
+      <FinalCTA navigate={navigate} user={user} />
 
       {/* ══ FOOTER ══ */}
       <SiteFooter />
@@ -526,9 +562,31 @@ export default function Landing() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TOP NAV
+// TOP NAV  — v2: anchor links + auth-aware user dropdown
 // ─────────────────────────────────────────────────────────────
 function TopNav({ scrolled, navigate, user }) {
+  const { logout } = useAuth();
+  const [dropOpen, setDropOpen] = useState(false);
+  const dropRef = useRef(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (dropRef.current && !dropRef.current.contains(e.target)) {
+        setDropOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const NAV_LINKS = [
+    { label: "Tech Stack",    id: "tech-stack"   },
+    { label: "Capabilities",  id: "capabilities" },
+    { label: "Architecture",  id: "architecture" },
+    { label: "Status",        id: "status"       },
+  ];
+
   return (
     <motion.nav
       initial={{ y: -72, opacity: 0 }}
@@ -544,9 +602,9 @@ function TopNav({ scrolled, navigate, user }) {
         transition: "background 0.3s, border 0.3s, backdrop-filter 0.3s",
       }}
     >
-      {/* Logo */}
+      {/* Logo — clicks to smooth-scroll top */}
       <motion.div
-        onClick={() => navigate("/")}
+        onClick={() => scrollToId("top")}
         whileHover={{ scale: 1.03 }}
         whileTap={{ scale: 0.97 }}
         style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
@@ -568,16 +626,35 @@ function TopNav({ scrolled, navigate, user }) {
         </div>
       </motion.div>
 
-      {/* Nav actions */}
+      {/* Centre anchor links */}
+      <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+        {NAV_LINKS.map((link) => (
+          <motion.button
+            key={link.id}
+            onClick={() => scrollToId(link.id)}
+            style={{
+              background: "transparent", border: "none",
+              color: T.dim, fontFamily: "'DM Sans', sans-serif",
+              fontSize: 12, fontWeight: 500, cursor: "pointer",
+              padding: "5px 11px", borderRadius: "var(--radius-sm)",
+              letterSpacing: 0.2,
+            }}
+            whileHover={{ color: T.text }}
+          >
+            {link.label}
+          </motion.button>
+        ))}
+      </div>
+
+      {/* Right: Metrics + auth actions */}
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        {/* Analytics link — always visible */}
+        {/* Metrics — always visible */}
         <motion.button
           style={{
             background: "transparent", border: "none",
             color: T.muted, fontFamily: "'DM Sans', sans-serif",
             fontSize: 13, fontWeight: 500, cursor: "pointer",
             padding: "5px 10px", borderRadius: "var(--radius-sm)",
-            transition: "color 0.18s",
           }}
           onClick={() => navigate("/analytics")}
           whileHover={{ color: T.text }}
@@ -586,15 +663,126 @@ function TopNav({ scrolled, navigate, user }) {
         </motion.button>
 
         {user ? (
-          <motion.button
-            className="s-btn s-btn-primary"
-            onClick={() => navigate("/dashboard")}
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.97 }}
-          >
-            Dashboard →
-          </motion.button>
+          /* ── Logged-in: User dropdown ── */
+          <div ref={dropRef} style={{ position: "relative" }}>
+            <motion.button
+              onClick={() => setDropOpen((v) => !v)}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                background: "rgba(69,123,157,0.10)",
+                border: `1px solid ${dropOpen ? T.teal : T.border}`,
+                borderRadius: "var(--radius-md)",
+                padding: "6px 12px 6px 9px",
+                cursor: "pointer",
+                transition: "border-color 0.2s",
+              }}
+            >
+              {/* Avatar circle */}
+              <div style={{
+                width: 26, height: 26, borderRadius: "50%",
+                background: `linear-gradient(135deg, ${T.teal}55, ${T.teal}22)`,
+                border: `1px solid ${T.teal}55`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0,
+              }}>
+                <span style={{
+                  fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
+                  fontSize: 11, color: T.teal,
+                }}>
+                  {user.name?.[0]?.toUpperCase() ?? "O"}
+                </span>
+              </div>
+              <div style={{ textAlign: "left" }}>
+                <div style={{
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+                  fontWeight: 600, color: T.text,
+                  maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  {user.name}
+                </div>
+                <div style={{
+                  fontFamily: "'Space Mono', monospace", fontSize: 7,
+                  letterSpacing: 1.5, color: T.teal, textTransform: "uppercase",
+                }}>
+                  {user.role}
+                </div>
+              </div>
+              {/* Chevron */}
+              <svg
+                width="10" height="10" viewBox="0 0 10 10" fill="none"
+                style={{
+                  transform: dropOpen ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 0.2s", flexShrink: 0,
+                }}
+              >
+                <path d="M2 3.5L5 6.5L8 3.5" stroke={T.muted} strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </motion.button>
+
+            {/* Dropdown panel */}
+            <AnimatePresence>
+              {dropOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                  animate={{ opacity: 1, y: 0,  scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.97 }}
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  style={{
+                    position: "absolute", top: "calc(100% + 8px)", right: 0,
+                    width: 188,
+                    background: T.card,
+                    border: `1px solid ${T.borderH}`,
+                    borderRadius: "var(--radius-md)",
+                    boxShadow: "0 12px 36px rgba(0,0,0,0.55)",
+                    overflow: "hidden",
+                    zIndex: 1000,
+                  }}
+                >
+                  {/* User info header */}
+                  <div style={{
+                    padding: "12px 14px 10px",
+                    borderBottom: `1px solid ${T.border}`,
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: T.text, fontFamily: "'DM Sans', sans-serif" }}>
+                      {user.name}
+                    </div>
+                    <div style={{
+                      fontFamily: "'Space Mono', monospace", fontSize: 8,
+                      letterSpacing: 1.5, color: T.teal, textTransform: "uppercase", marginTop: 2,
+                    }}>
+                      {user.role} operator
+                    </div>
+                  </div>
+
+                  {/* Menu items */}
+                  {[
+                    { label: "My Profile",  icon: "👤", action: () => { setDropOpen(false); navigate("/profile"); } },
+                    { label: "Dashboard",   icon: "🛡️", action: () => { setDropOpen(false); navigate("/dashboard"); } },
+                  ].map((item) => (
+                    <DropdownItem key={item.label} {...item} />
+                  ))}
+
+                  <div style={{ height: 1, background: T.border, margin: "4px 0" }} />
+
+                  {/* Logout */}
+                  <DropdownItem
+                    label="Sign Out"
+                    icon="↩"
+                    danger
+                    action={() => {
+                      setDropOpen(false);
+                      logout();
+                      navigate("/");
+                    }}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         ) : (
+          /* ── Guest: Login + Register ── */
           <>
             <motion.button
               className="s-btn s-btn-ghost"
@@ -619,8 +807,36 @@ function TopNav({ scrolled, navigate, user }) {
   );
 }
 
+function DropdownItem({ label, icon, action, danger = false }) {
+  const [hov, setHov] = useState(false);
+  return (
+    <button
+      onClick={action}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 9,
+        padding: "9px 14px", background: hov
+          ? danger ? "rgba(230,57,70,0.08)" : "rgba(69,123,157,0.08)"
+          : "transparent",
+        border: "none", cursor: "pointer", textAlign: "left",
+        transition: "background 0.15s",
+      }}
+    >
+      <span style={{ fontSize: 13 }}>{icon}</span>
+      <span style={{
+        fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 500,
+        color: danger ? (hov ? T.crimson : "#c47a7a") : (hov ? T.text : T.muted),
+        transition: "color 0.15s",
+      }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
-// STAT CELL — hero stat row
+// STAT CELL
 // ─────────────────────────────────────────────────────────────
 function StatCell({ s, i }) {
   return (
@@ -690,18 +906,17 @@ function StatusTicker() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// TECH STACK SECTION
+// TECH STACK SECTION  — id="tech-stack"
 // ─────────────────────────────────────────────────────────────
 function TechStackSection() {
   const ref    = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
 
   return (
-    <section ref={ref} style={{
+    <section id="tech-stack" ref={ref} style={{
       padding: "100px 36px",
       maxWidth: 1280, margin: "0 auto",
     }}>
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 24 }}
         animate={inView ? { opacity: 1, y: 0 } : {}}
@@ -725,7 +940,6 @@ function TechStackSection() {
         </p>
       </motion.div>
 
-      {/* 2×2 tech cards */}
       <motion.div
         variants={stagger}
         initial="hidden"
@@ -760,7 +974,6 @@ function TechCard({ tech }) {
         position: "relative", overflow: "hidden",
       }}
     >
-      {/* Corner accent */}
       <div style={{
         position: "absolute", top: 0, right: 0,
         width: 60, height: 60,
@@ -769,38 +982,29 @@ function TechCard({ tech }) {
         transition: "opacity 0.3s",
         pointerEvents: "none",
       }} />
-
       <div style={{ fontSize: 28, marginBottom: 14 }}>{tech.icon}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-        <h3 style={{
-          fontFamily: "'Space Mono', monospace", fontWeight: 700,
-          fontSize: 14, color: tech.color,
-        }}>
+        <h3 style={{ fontFamily: "'Space Mono', monospace", fontWeight: 700, fontSize: 14, color: tech.color }}>
           {tech.name}
         </h3>
-        <span style={{
-          fontFamily: "'Space Mono', monospace", fontSize: 8,
-          letterSpacing: 1.5, color: T.dim, textTransform: "uppercase",
-        }}>
+        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 8, letterSpacing: 1.5, color: T.dim, textTransform: "uppercase" }}>
           {tech.role}
         </span>
       </div>
-      <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.65 }}>
-        {tech.desc}
-      </p>
+      <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.65 }}>{tech.desc}</p>
     </motion.div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// CAPABILITY MATRIX — Six feature cards
+// CAPABILITY MATRIX  — id="capabilities"
 // ─────────────────────────────────────────────────────────────
-function CapabilityMatrix({ navigate }) {
+function CapabilityMatrix({ navigate, user }) {
   const ref    = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
 
   return (
-    <section ref={ref} style={{
+    <section id="capabilities" ref={ref} style={{
       padding: "80px 36px 100px",
       background: T.panel,
       borderTop: `1px solid ${T.border}`,
@@ -830,7 +1034,6 @@ function CapabilityMatrix({ navigate }) {
           </p>
         </motion.div>
 
-        {/* 3-column grid, 1px border separator trick */}
         <motion.div
           variants={stagger}
           initial="hidden"
@@ -859,11 +1062,11 @@ function CapabilityMatrix({ navigate }) {
           <motion.button
             className="s-btn s-btn-ghost"
             style={{ padding: "11px 30px", fontSize: 13 }}
-            onClick={() => navigate("/register")}
+            onClick={() => user ? navigate("/dashboard") : navigate("/register")}
             whileHover={{ scale: 1.04 }}
             whileTap={{ scale: 0.97 }}
           >
-            Explore All Features →
+            {user ? "Open Command Dashboard →" : "Explore All Features →"}
           </motion.button>
           <motion.button
             style={{
@@ -901,7 +1104,6 @@ function FeatureCard({ f }) {
         cursor: "default",
       }}
     >
-      {/* Hover border overlay */}
       <motion.div
         animate={{ opacity: hovered ? 1 : 0 }}
         transition={{ duration: 0.25 }}
@@ -911,8 +1113,6 @@ function FeatureCard({ f }) {
           pointerEvents: "none",
         }}
       />
-
-      {/* Bottom accent line */}
       <motion.div
         animate={{ scaleX: hovered ? 1 : 0, opacity: hovered ? 1 : 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
@@ -923,8 +1123,6 @@ function FeatureCard({ f }) {
           transformOrigin: "left",
         }}
       />
-
-      {/* Tag */}
       <div style={{
         fontFamily: "'Space Mono', monospace", fontSize: 8,
         letterSpacing: 2, color: f.accent, opacity: 0.75,
@@ -932,101 +1130,71 @@ function FeatureCard({ f }) {
       }}>
         {f.tag}
       </div>
-
-      {/* Icon */}
-      <motion.div
-        animate={{ scale: hovered ? 1.15 : 1 }}
-        transition={{ type: "spring", stiffness: 280, damping: 18 }}
-        style={{ fontSize: 28, marginBottom: 14, display: "inline-block" }}
-      >
-        {f.icon}
-      </motion.div>
-
-      {/* Title */}
+      <div style={{ fontSize: 30, marginBottom: 12 }}>{f.icon}</div>
       <h3 style={{
         fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
-        fontSize: 17, marginBottom: 10, color: T.text,
+        fontSize: 17, color: T.text, marginBottom: 10,
       }}>
         {f.title}
       </h3>
-
-      {/* Body */}
-      <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.7 }}>
-        {f.body}
-      </p>
+      <p style={{ color: T.muted, fontSize: 13, lineHeight: 1.7 }}>{f.body}</p>
     </motion.div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// THREAT PIPELINE — animated 4-step flow
+// THREAT PIPELINE  — id="architecture"
 // ─────────────────────────────────────────────────────────────
 function ThreatPipeline() {
   const ref    = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
 
   return (
-    <section ref={ref} style={{
+    <section id="architecture" ref={ref} style={{
       padding: "100px 36px",
       maxWidth: 1280, margin: "0 auto",
     }}>
-      <div style={{
-        display: "flex", gap: 80, alignItems: "center", flexWrap: "wrap",
-      }}>
-        {/* Left copy */}
+      <div style={{ maxWidth: 960, margin: "0 auto" }}>
         <motion.div
-          initial={{ opacity: 0, x: -32 }}
-          animate={inView ? { opacity: 1, x: 0 } : {}}
-          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-          style={{ flex: "0 0 300px" }}
+          initial={{ opacity: 0, y: 24 }}
+          animate={inView ? { opacity: 1, y: 0 } : {}}
+          transition={{ duration: 0.6 }}
+          style={{ textAlign: "center", marginBottom: 64 }}
         >
-          <SectionTag label="Threat Architecture" />
+          <SectionTag label="Threat Pipeline" />
           <h2 style={{
             fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
-            fontSize: "clamp(1.7rem, 2.8vw, 2.4rem)",
-            lineHeight: 1.2, marginBottom: 18,
+            fontSize: "clamp(1.8rem, 3.5vw, 2.8rem)",
             color: T.text, letterSpacing: "-0.3px",
           }}>
-            Detection to Alert in Under 30 Seconds
+            Detection to Dispatch — 4 Steps
           </h2>
-          <p style={{ color: T.muted, lineHeight: 1.75, fontSize: 14, marginBottom: 24 }}>
-            Sentinel's pipeline is fully deterministic. Every incident travels
-            through AI analysis → admin verification → targeted dispatch.
-            No missed steps. No alert fatigue. No broadcast spam.
-          </p>
-
-          {/* Latency callout */}
-          <div style={{
-            padding: "12px 16px",
-            background: "rgba(69,123,157,0.06)",
-            border: `1px solid ${T.borderH}`,
-            borderRadius: "var(--radius-md)",
-            display: "flex", alignItems: "center", gap: 8,
+          <p style={{
+            color: T.muted, fontSize: 15, maxWidth: 480,
+            margin: "14px auto 0", lineHeight: 1.7,
           }}>
-            <span style={{ fontSize: 14 }}>⚡</span>
-            <span style={{
-              fontFamily: "'Space Mono', monospace", fontSize: 9,
-              letterSpacing: 1.5, color: T.teal,
-              textTransform: "uppercase",
-            }}>
-              Pipeline Latency: &lt;30 s End-to-End
-            </span>
-          </div>
+            Every threat follows a deterministic path from raw input to verified alert.
+            No ambiguity. No uncontrolled broadcasts.
+          </p>
         </motion.div>
 
-        {/* Right — animated pipeline steps */}
-        <div style={{ flex: 1, minWidth: 260, position: "relative" }}>
-          {/* Connecting line */}
-          <div style={{
-            position: "absolute", left: 21, top: 36, bottom: 36,
-            width: 2, zIndex: 0,
-          }}>
-            <svg width="2" height="100%" viewBox="0 0 2 100"
-              preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
-              <line x1="1" y1="0" x2="1" y2="100"
-                stroke={T.border} strokeWidth="1.5" />
-              <motion.line x1="1" y1="0" x2="1" y2="100"
-                stroke="url(#pg)" strokeWidth="2" strokeLinecap="round"
+        <div style={{ display: "flex", gap: 40, alignItems: "flex-start", justifyContent: "center", flexWrap: "wrap" }}>
+          {/* Animated connector line */}
+          <div style={{ position: "relative", width: 2, flexShrink: 0, alignSelf: "stretch", minHeight: 260 }}>
+            <div style={{
+              position: "absolute", inset: 0,
+              background: `linear-gradient(${T.border}, ${T.border})`,
+            }} />
+            <svg
+              width="2"
+              height="100%"
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+              preserveAspectRatio="none"
+            >
+              <motion.line
+                x1="1" y1="0" x2="1" y2="100%"
+                stroke="url(#pg)"
+                strokeWidth="2"
                 initial={{ pathLength: 0, opacity: 0 }}
                 animate={inView ? { pathLength: 1, opacity: 1 } : {}}
                 transition={{ duration: 1.8, delay: 0.3, ease: "easeInOut" }}
@@ -1068,7 +1236,6 @@ function PipelineStep({ s, i, inView, last }) {
         position: "relative", zIndex: 1,
       }}
     >
-      {/* Step badge */}
       <motion.div
         animate={{
           boxShadow: hovered ? `0 0 18px ${s.color}50` : "none",
@@ -1084,29 +1251,18 @@ function PipelineStep({ s, i, inView, last }) {
           flexShrink: 0,
         }}
       >
-        <span style={{
-          fontFamily: "'Space Mono', monospace", fontSize: 11,
-          fontWeight: 700, color: s.color,
-        }}>
+        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, fontWeight: 700, color: s.color }}>
           {s.id}
         </span>
       </motion.div>
 
-      {/* Content */}
       <div style={{ paddingTop: 4 }}>
-        <div style={{
-          fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
-          fontSize: 16, color: T.text, marginBottom: 3,
-        }}>
+        <div style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 700, fontSize: 16, color: T.text, marginBottom: 3 }}>
           {s.label}
         </div>
-        <div style={{
-          fontFamily: "'Space Mono', monospace", fontSize: 10,
-          color: T.muted, letterSpacing: 0.4,
-        }}>
+        <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: T.muted, letterSpacing: 0.4 }}>
           {s.sub}
         </div>
-        {/* Hover chip */}
         <AnimatePresence>
           {hovered && (
             <motion.div
@@ -1123,14 +1279,8 @@ function PipelineStep({ s, i, inView, last }) {
                 borderRadius: 99,
               }}
             >
-              <div style={{
-                width: 5, height: 5, borderRadius: "50%",
-                background: s.color, boxShadow: `0 0 4px ${s.color}`,
-              }} />
-              <span style={{
-                fontFamily: "'Space Mono', monospace", fontSize: 8,
-                letterSpacing: 1.5, color: s.color,
-              }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: s.color, boxShadow: `0 0 4px ${s.color}` }} />
+              <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 8, letterSpacing: 1.5, color: s.color }}>
                 STEP {s.id} ACTIVE
               </span>
             </motion.div>
@@ -1142,8 +1292,7 @@ function PipelineStep({ s, i, inView, last }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// LIVE SYSTEM STATUS SECTION
-// Floating card with real-time status indicators
+// LIVE SYSTEM STATUS  — id="status"
 // ─────────────────────────────────────────────────────────────
 function LiveStatusSection() {
   const ref    = useRef(null);
@@ -1161,7 +1310,7 @@ function LiveStatusSection() {
   ];
 
   return (
-    <section ref={ref} style={{
+    <section id="status" ref={ref} style={{
       padding: "80px 36px",
       background: T.panel,
       borderTop: `1px solid ${T.border}`,
@@ -1219,14 +1368,12 @@ function LiveStatusSection() {
                   transition={{ duration: 2.2 + i * 0.3, repeat: Infinity, ease: "easeInOut" }}
                   style={{
                     width: 6, height: 6, borderRadius: "50%",
-                    background: sys.color,
-                    boxShadow: `0 0 5px ${sys.color}`,
+                    background: sys.color, boxShadow: `0 0 5px ${sys.color}`,
                   }}
                 />
                 <span style={{
                   fontFamily: "'Space Mono', monospace", fontSize: 8,
-                  letterSpacing: 1, color: sys.color,
-                  textTransform: "uppercase",
+                  letterSpacing: 1, color: sys.color, textTransform: "uppercase",
                 }}>
                   {sys.status}
                 </span>
@@ -1240,9 +1387,9 @@ function LiveStatusSection() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FINAL CTA
+// FINAL CTA  — auth-aware
 // ─────────────────────────────────────────────────────────────
-function FinalCTA({ navigate }) {
+function FinalCTA({ navigate, user }) {
   const ref    = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-70px" });
 
@@ -1252,7 +1399,6 @@ function FinalCTA({ navigate }) {
       textAlign: "center",
       position: "relative", overflow: "hidden",
     }}>
-      {/* Background glows */}
       <div style={{
         position: "absolute", top: "50%", left: "50%",
         transform: "translate(-50%,-50%)",
@@ -1288,32 +1434,39 @@ function FinalCTA({ navigate }) {
           color: T.muted, maxWidth: 440,
           margin: "0 auto 40px", fontSize: 15, lineHeight: 1.75,
         }}>
-          Join the operators protecting India's cities with
-          AI-powered disaster intelligence. Free to deploy.
+          {user
+            ? `Welcome back, ${user.name}. Your platform is live and ready.`
+            : "Join the operators protecting India's cities with AI-powered disaster intelligence. Free to deploy."
+          }
         </p>
 
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginBottom: 48 }}>
+          {/* ── AUTH-AWARE primary CTA ── */}
           <motion.button
             className="s-btn s-btn-primary"
             style={{ padding: "14px 44px", fontSize: 14, position: "relative", overflow: "hidden" }}
-            onClick={() => navigate("/register")}
+            onClick={() => user ? navigate("/dashboard") : navigate("/register")}
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.97 }}
           >
             <ShimmerOverlay />
-            Activate Sentinel →
+            {user ? "Go to Command Dashboard →" : "Activate Sentinel →"}
           </motion.button>
 
-          <motion.button
-            className="s-btn s-btn-ghost"
-            style={{ padding: "14px 30px", fontSize: 14 }}
-            onClick={() => navigate("/login")}
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.97 }}
-          >
-            Already Deployed? Sign In
-          </motion.button>
+          {/* ── Only show Sign In button for guests ── */}
+          {!user && (
+            <motion.button
+              className="s-btn s-btn-ghost"
+              style={{ padding: "14px 30px", fontSize: 14 }}
+              onClick={() => navigate("/login")}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.97 }}
+            >
+              Already Deployed? Sign In
+            </motion.button>
+          )}
 
+          {/* Metrics — always */}
           <motion.button
             style={{
               padding: "14px 26px", fontSize: 13,
@@ -1333,7 +1486,6 @@ function FinalCTA({ navigate }) {
           </motion.button>
         </div>
 
-        {/* Trust line */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={inView ? { opacity: 1 } : {}}
@@ -1413,12 +1565,9 @@ function SiteFooter() {
 // UTILITY COMPONENTS
 // ─────────────────────────────────────────────────────────────
 
-/** Section label tag — horizontal rule + uppercase label + rule */
 function SectionTag({ label }) {
   return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 14,
-    }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
       <div style={{ width: 20, height: 1, background: T.borderH }} />
       <span style={{
         fontFamily: "'Space Mono', monospace", fontSize: 9,
@@ -1431,7 +1580,6 @@ function SectionTag({ label }) {
   );
 }
 
-/** Pulsing live indicator dot */
 function LivePulse({ color = T.green }) {
   return (
     <div style={{ position: "relative", width: 16, height: 16, flexShrink: 0 }}>
@@ -1453,7 +1601,6 @@ function LivePulse({ color = T.green }) {
   );
 }
 
-/** Shimmer sweep on primary CTA buttons */
 function ShimmerOverlay() {
   return (
     <motion.div
@@ -1468,7 +1615,6 @@ function ShimmerOverlay() {
   );
 }
 
-/** Enterprise shield SVG — replaces neon hexagon */
 function ShieldLogo({ size = 32 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">

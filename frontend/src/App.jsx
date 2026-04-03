@@ -5,10 +5,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import Landing from "./Landing";
+import Landing   from "./Landing";
 import { LoginPage, RegisterPage, ForgotPasswordPage, ResetPasswordPage } from "./Auth";
 import Dashboard from "./Dashboard";
 import Analytics from "./Analytics";
+import Profile   from "./Profile";
 
 // ─────────────────────────────────────────────
 // AUTH CONTEXT
@@ -134,6 +135,7 @@ export default function App() {
 
           {/* Protected */}
           <Route path="/dashboard"       element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+          <Route path="/profile"         element={<PrivateRoute><Profile /></PrivateRoute>} />
 
           {/* Catch-all */}
           <Route path="*"                element={<Navigate to="/" replace />} />
@@ -225,10 +227,10 @@ function GlobalStyles() {
         --font-mono:    'Space Mono', 'Courier New', monospace;
 
         /* Radius */
-        --radius-sm:  4px;
-        --radius-md:  8px;
-        --radius-lg:  12px;
-        --radius-xl:  16px;
+        --radius-sm: 6px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+        --radius-xl: 16px;
       }
 
       html { scroll-behavior: smooth; }
@@ -237,44 +239,17 @@ function GlobalStyles() {
         background: var(--bg-void);
         color: var(--text-primary);
         font-family: var(--font-body);
-        font-size: 14px;
-        line-height: 1.6;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
-      }
-
-      /* Scrollbar — thin, enterprise */
-      ::-webkit-scrollbar { width: 5px; height: 5px; }
-      ::-webkit-scrollbar-track { background: var(--bg-deep); }
-      ::-webkit-scrollbar-thumb {
-        background: rgba(69,123,157,0.30);
-        border-radius: 3px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: rgba(69,123,157,0.55);
+        overflow-x: hidden;
       }
 
       /* ══════════════════════════════════════════
-         LOADING SPINNER
+         SCROLLBAR — enterprise dark
          ══════════════════════════════════════════ */
-      .s-spinner {
-        width: 36px; height: 36px;
-        border: 2px solid var(--border);
-        border-top-color: var(--teal);
-        border-radius: 50%;
-        animation: s-spin 0.75s linear infinite;
-        margin: 0 auto;
-      }
-      /* Legacy alias */
-      .sentinel-spinner {
-        width: 36px; height: 36px;
-        border: 2px solid var(--border);
-        border-top-color: var(--teal);
-        border-radius: 50%;
-        animation: s-spin 0.75s linear infinite;
-        margin: 0 auto;
-      }
-      @keyframes s-spin { to { transform: rotate(360deg); } }
+      ::-webkit-scrollbar       { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: var(--bg-void); }
+      ::-webkit-scrollbar-thumb { background: var(--border-hot); border-radius: 99px; }
 
       /* ══════════════════════════════════════════
          BUTTONS
@@ -284,64 +259,77 @@ function GlobalStyles() {
         align-items: center;
         justify-content: center;
         gap: 7px;
-        font-family: var(--font-body);
-        font-weight: 600;
-        font-size: 13px;
-        letter-spacing: 0.3px;
-        cursor: pointer;
-        border: 1px solid transparent;
-        border-radius: var(--radius-md);
         padding: 9px 20px;
-        transition: all 0.18s ease;
+        border-radius: var(--radius-md);
+        font-family: var(--font-body);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
+        transition: background 0.18s, color 0.18s, box-shadow 0.18s, transform 0.12s;
         white-space: nowrap;
-        text-transform: none;
+        text-decoration: none;
       }
-      .s-btn:disabled { opacity: 0.38; cursor: not-allowed; pointer-events: none; }
+      .s-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
 
-      /* Primary — filled teal */
+      /* Primary — operational teal */
       .s-btn-primary {
         background: var(--teal);
-        color: #ffffff;
-        border-color: var(--teal);
+        color: #fff;
       }
-      .s-btn-primary:hover:not(:disabled) {
-        background: #5290B5;
-        border-color: #5290B5;
-        box-shadow: 0 0 0 3px rgba(69,123,157,0.18);
+      .s-btn-primary:hover {
+        background: #5591b4;
+        box-shadow: 0 0 18px rgba(69,123,157,0.35);
       }
 
-      /* Ghost — outlined */
+      /* Ghost — outline variant */
       .s-btn-ghost {
         background: transparent;
-        color: var(--teal);
-        border-color: var(--border-hot);
+        color: var(--text-muted);
+        border: 1px solid var(--border-hot);
       }
-      .s-btn-ghost:hover:not(:disabled) {
-        background: var(--teal-dim);
+      .s-btn-ghost:hover {
+        color: var(--text-primary);
         border-color: var(--teal);
+        background: var(--teal-glow);
       }
 
       /* Danger — crimson */
       .s-btn-danger {
-        background: var(--crimson-dim);
-        color: var(--crimson);
-        border-color: rgba(230,57,70,0.30);
+        background: var(--crimson);
+        color: #fff;
       }
-      .s-btn-danger:hover:not(:disabled) {
-        background: rgba(230,57,70,0.22);
-        border-color: var(--crimson);
+      .s-btn-danger:hover {
+        background: #f04550;
+        box-shadow: 0 0 18px rgba(230,57,70,0.35);
       }
 
-      /* Success — green */
+      /* Success */
       .s-btn-success {
-        background: var(--green-dim);
-        color: var(--green);
-        border-color: rgba(42,157,143,0.30);
+        background: var(--green);
+        color: #fff;
       }
-      .s-btn-success:hover:not(:disabled) {
-        background: rgba(42,157,143,0.22);
-        border-color: var(--green);
+      .s-btn-success:hover {
+        background: #33b5a6;
+        box-shadow: 0 0 18px rgba(42,157,143,0.35);
       }
+
+      /* ══════════════════════════════════════════
+         SPINNER
+         ══════════════════════════════════════════ */
+      .s-spinner {
+        width: 28px; height: 28px;
+        border: 2.5px solid var(--border);
+        border-top-color: var(--teal);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        margin: 0 auto;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
 
       /* ══════════════════════════════════════════
          FORM INPUTS
@@ -391,8 +379,6 @@ function GlobalStyles() {
       /* ══════════════════════════════════════════
          BACKGROUNDS & DECORATIVE
          ══════════════════════════════════════════ */
-
-      /* Subtle grid — used on auth left panel, landing sections */
       .grid-bg {
         background-image:
           linear-gradient(rgba(69,123,157,0.04) 1px, transparent 1px),
@@ -400,7 +386,6 @@ function GlobalStyles() {
         background-size: 48px 48px;
       }
 
-      /* Horizontal scan line — used in auth branding column */
       .scan-line {
         position: absolute;
         top: 0; left: 0; right: 0;
@@ -420,8 +405,6 @@ function GlobalStyles() {
       /* ══════════════════════════════════════════
          ANIMATIONS
          ══════════════════════════════════════════ */
-
-      /* Fade up — page entrances, card reveals */
       .fade-up {
         opacity: 0;
         transform: translateY(20px);
@@ -435,13 +418,11 @@ function GlobalStyles() {
         to { opacity: 1; transform: translateY(0); }
       }
 
-      /* Subtle pulse — status indicators, live badges */
       @keyframes status-pulse {
         0%, 100% { opacity: 1;   transform: scale(1); }
         50%       { opacity: 0.6; transform: scale(0.85); }
       }
 
-      /* Gentle float — hero illustration elements */
       @keyframes float {
         0%, 100% { transform: translateY(0); }
         50%       { transform: translateY(-8px); }
@@ -449,9 +430,6 @@ function GlobalStyles() {
 
       /* ══════════════════════════════════════════
          PULSING LEAFLET MAP MARKERS
-         Used by L.divIcon instances in Dashboard.jsx.
-         These must NOT reference neon colors — using
-         the enterprise palette instead.
          ══════════════════════════════════════════ */
       .pulse-marker {
         position: relative;
@@ -482,21 +460,14 @@ function GlobalStyles() {
         100% { transform: translate(-50%,-50%) scale(3.8); opacity: 0;   }
       }
 
-      /* Crimson — fire / critical incidents */
-      .pulse-red::before { background: #E63946; box-shadow: 0 0 7px #E63946; }
-      .pulse-red::after  { background: #E63946; }
-
-      /* Amber — moderate incidents */
+      .pulse-red::before    { background: #E63946; box-shadow: 0 0 7px #E63946; }
+      .pulse-red::after     { background: #E63946; }
       .pulse-orange::before { background: #F4A261; box-shadow: 0 0 7px #F4A261; }
       .pulse-orange::after  { background: #F4A261; }
-
-      /* Teal — monitored city */
-      .pulse-blue::before { background: #457B9D; box-shadow: 0 0 7px #457B9D; }
-      .pulse-blue::after  { background: #457B9D; }
-
-      /* Green — safe zones & shelters */
-      .pulse-green::before { background: #2A9D8F; box-shadow: 0 0 7px #2A9D8F; }
-      .pulse-green::after  { background: #2A9D8F; animation-duration: 3.2s; }
+      .pulse-blue::before   { background: #457B9D; box-shadow: 0 0 7px #457B9D; }
+      .pulse-blue::after    { background: #457B9D; }
+      .pulse-green::before  { background: #2A9D8F; box-shadow: 0 0 7px #2A9D8F; }
+      .pulse-green::after   { background: #2A9D8F; animation-duration: 3.2s; }
 
       /* ══════════════════════════════════════════
          LEAFLET POPUP OVERRIDES

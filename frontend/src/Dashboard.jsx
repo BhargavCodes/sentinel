@@ -1,44 +1,35 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Dashboard.jsx  —  Sentinel  |  Enterprise Operational Command Center
+// Dashboard.jsx  —  Sentinel  |  Enterprise Operational Command Center  v3.0
 // ═══════════════════════════════════════════════════════════════════════════
 //
-//  Theme: "Enterprise Disaster Command"
-//  Palette sourced from App.jsx CSS variables:
-//    --bg-void    #0B1320   deep navy
-//    --bg-deep    #111C2D   raised panel
-//    --bg-card    #162237   card surface
-//    --bg-raised  #1A2840   input/chip bg
-//    --teal       #457B9D   operational accent (primary)
-//    --crimson    #E63946   fire / danger / alert
-//    --amber      #F4A261   warning / pending
-//    --green      #2A9D8F   safe / verified / success
-//    --border     rgba(69,123,157,0.15)
-//    --border-hot rgba(69,123,157,0.40)
-//    --text-primary  #F0F4F8
-//    --text-muted    #8AABB8
-//    --text-dim      #4A6A7A
+//  Upgrades in this version:
+//  ▸ Weather HUD: collapsible spring-physics modal (380 px expanded)
+//      - Compact state: temp + icon + city only
+//      - Expanded state: full weather command center (stats grid, hourly
+//        6-slot forecast strip, UV index, pressure, visibility, wind dir)
+//      - "Generate Situation Report" PDF button lives here
+//      - Skeleton loader on data refresh
+//  ▸ Incident History: true Accordion — one card open at a time
+//      - Compact strip: icon · location · severity badge
+//      - Expanded panel (AnimatePresence height:auto): timestamp,
+//        AI confidence, notes, "Reported by" from joined DB column
+//      - Critical cards: left crimson glow + pulsing ring indicator
+//      - Hover states with border glow
+//      - Skeleton loading (3 shimmer placeholders)
+//      - Radar-icon empty state
+//  ▸ Global: DM Sans body / Space Mono data, custom sidebar scrollbar,
+//    per-button spinner+disabled states throughout
 //
-//  Typography rule:
-//    var(--font-body) / DM Sans  — all prose, labels, buttons
-//    var(--font-mono) / Space Mono — data points, API values, status codes
-//
-//  Layout:
-//  ┌─────────────────────────────────────────────────────────────────┐
-//  │  TopNav (fixed 52px)                                            │
-//  ├──────────────┬──────────────────────────────────────────────────┤
-//  │ Sidebar 380px│  Map (flex:1, position:relative)                 │
-//  │              │  ┌ AQI HUD          top-left                     │
-//  │ • Search     │  ┌ Weather HUD+PDF  top-right                    │
-//  │ • Fire AI    │  ┌ Seismic HUD      bottom-left                  │
-//  │   (all roles)│  ┌ LayerDock        bottom-center                │
-//  │ • Video AI   │                                                   │
-//  │   (admin)    │  Leaflet MapContainer                             │
-//  │ • Report     │    click → geocode (passive)                      │
-//  │   (public)   │    click → pin incident (active)                 │
-//  │ • History    │                                                   │
-//  │ ─────────────│                                                   │
-//  │ Admin Queue  │                                                   │
-//  └──────────────┴──────────────────────────────────────────────────┘
+//  ── ALL EXISTING FEATURES RETAINED ───────────────────────────────────────
+//  • Leaflet MapContainer + pulsing divIcon markers
+//  • Reverse-geocoding map clicks (passive mode)
+//  • Aerial Fire Intelligence (ALL roles) + MobileNetV2 result badge
+//  • Drone Video Analysis panel (admin) + Recharts confidence timeline
+//  • Public Report Incident modal (spring-physics animated)
+//  • AQI HUD (top-left) + Seismic HUD (bottom-left)
+//  • LayerDock weather overlay switcher + Shelters toggle
+//  • Admin Approval Queue with per-button loading states
+//  • authFetch / API_BASE imports — fetch logic unchanged
 // ═══════════════════════════════════════════════════════════════════════════
 
 import React, { useState, useEffect, useRef } from "react";
@@ -54,6 +45,7 @@ import { useAuth, authFetch } from "./App";
 import {
   LineChart, Line, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { motion, AnimatePresence } from "framer-motion";
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -78,16 +70,7 @@ const CITIES = [
   "Aurangabad","Amritsar","Ranchi","Guwahati","Chandigarh","Mysore","Dehradun",
 ];
 
-// Enterprise incident type colours — aligned to palette
-const TYPE_COLOR = {
-  fire:       "var(--crimson)",  // #E63946
-  earthquake: "var(--amber)",   // #F4A261
-  flood:      "var(--teal)",    // #457B9D
-  cyclone:    "#7B68B5",        // purple — no token, keep literal
-  other:      "var(--text-dim)",// #4A6A7A
-};
-
-// Resolved literals for contexts that can't use CSS variables (Recharts, etc.)
+// Resolved colour literals (CSS vars cannot be used in Recharts / L.divIcon)
 const C = {
   crimson: "#E63946",
   amber:   "#F4A261",
@@ -104,13 +87,21 @@ const C = {
   borderH: "rgba(69,123,157,0.40)",
 };
 
+const TYPE_ICON = {
+  fire: "🔥", earthquake: "🌍", flood: "🌊", cyclone: "🌀", other: "📋",
+};
+
+// Severity → resolved colour
+const SEV_COLOR = {
+  critical: C.crimson,
+  high:     "#E07B3A",
+  moderate: C.amber,
+  low:      C.green,
+};
+
 // ═══════════════════════════════════════════════════════════════════
 // LEAFLET ICON FACTORY
-// CSS classes defined in App.jsx GlobalStyles — enterprise palette:
-//   pulse-red    → Crimson  #E63946  (fire / critical)
-//   pulse-orange → Amber    #F4A261  (moderate incidents)
-//   pulse-blue   → Teal     #457B9D  (monitored city)
-//   pulse-green  → Green    #2A9D8F  (safe zones / shelters)
+// Pulse classes defined in App.jsx GlobalStyles (enterprise palette)
 // ═══════════════════════════════════════════════════════════════════
 
 function makePulseIcon(colorClass) {
@@ -133,7 +124,7 @@ function makePngIcon(color) {
   });
 }
 
-// Module-scope — never recreated on render
+// Created once at module scope
 const PulseBlueIcon   = makePulseIcon("pulse-blue");
 const PulseGreenIcon  = makePulseIcon("pulse-green");
 const PulseRedIcon    = makePulseIcon("pulse-red");
@@ -141,18 +132,162 @@ const PulseOrangeIcon = makePulseIcon("pulse-orange");
 const RedPinIcon      = makePngIcon("red");
 
 // ═══════════════════════════════════════════════════════════════════
-// SHARED GLASSMORPHISM — enterprise slate, NOT neon-tinted
+// SHARED GLASSMORPHISM OBJECT — deep navy, NOT neon-tinted
 // ═══════════════════════════════════════════════════════════════════
 
 const GLASS = {
-  background:           "rgba(11, 19, 32, 0.85)",  // --bg-void @ 85%
-  backdropFilter:       "blur(18px)",
-  WebkitBackdropFilter: "blur(18px)",
-  border:               `1px solid ${C.borderH}`,  // rgba(69,123,157,0.40)
-  borderRadius:         "var(--radius-lg)",         // 12px
-  boxShadow:            "0 8px 40px rgba(0,0,0,0.50), inset 0 1px 0 rgba(255,255,255,0.03)",
+  background:           "rgba(9, 16, 28, 0.88)",
+  backdropFilter:       "blur(22px)",
+  WebkitBackdropFilter: "blur(22px)",
+  border:               `1px solid ${C.borderH}`,
+  borderRadius:         "var(--radius-lg)",
+  boxShadow:            "0 12px 48px rgba(0,0,0,0.60), inset 0 1px 0 rgba(255,255,255,0.04)",
   pointerEvents:        "auto",
 };
+
+// ═══════════════════════════════════════════════════════════════════
+// SCOPED CSS — injected once on mount, cleaned up on unmount
+// ═══════════════════════════════════════════════════════════════════
+
+function DashboardStyles() {
+  useEffect(() => {
+    const ID = "sentinel-dashboard-v3-styles";
+    const existing = document.getElementById(ID);
+    if (existing) existing.remove();
+
+    const style = document.createElement("style");
+    style.id = ID;
+    style.textContent = `
+      /* ── Custom Scrollbar — sidebar ─────────────────────────────── */
+      .sentinel-sidebar-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(69,123,157,0.28) transparent;
+      }
+      .sentinel-sidebar-scroll::-webkit-scrollbar { width: 4px; }
+      .sentinel-sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+      .sentinel-sidebar-scroll::-webkit-scrollbar-thumb {
+        background: rgba(69,123,157,0.28);
+        border-radius: 99px;
+      }
+      .sentinel-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(69,123,157,0.52);
+      }
+
+      /* ── Accordion tactical card ─────────────────────────────────── */
+      .tactical-card {
+        position: relative;
+        background: rgba(22,34,55,0.80);
+        border: 1px solid rgba(69,123,157,0.12);
+        border-radius: 10px;
+        cursor: pointer;
+        transition:
+          transform 0.20s cubic-bezier(0.22,1,0.36,1),
+          box-shadow 0.20s cubic-bezier(0.22,1,0.36,1),
+          border-color 0.20s ease,
+          background  0.20s ease;
+        overflow: hidden;
+        user-select: none;
+      }
+      .tactical-card:hover {
+        transform: translateY(-2px);
+        background: rgba(26,40,64,0.95);
+      }
+
+      /* Left-border severity colour variants + hover glow */
+      .tactical-card.critical-card  { border-left: 3px solid #E63946 !important; }
+      .tactical-card.critical-card:hover {
+        border-color: rgba(230,57,70,0.60) !important;
+        box-shadow: 0 8px 28px rgba(230,57,70,0.14), 0 3px 12px rgba(0,0,0,0.38);
+      }
+      .tactical-card.high-card      { border-left: 3px solid #E07B3A !important; }
+      .tactical-card.high-card:hover {
+        border-color: rgba(224,123,58,0.55) !important;
+        box-shadow: 0 8px 28px rgba(224,123,58,0.12), 0 3px 12px rgba(0,0,0,0.38);
+      }
+      .tactical-card.moderate-card  { border-left: 3px solid #F4A261 !important; }
+      .tactical-card.moderate-card:hover {
+        border-color: rgba(244,162,97,0.55) !important;
+        box-shadow: 0 8px 28px rgba(244,162,97,0.10), 0 3px 12px rgba(0,0,0,0.38);
+      }
+      .tactical-card.low-card       { border-left: 3px solid #2A9D8F !important; }
+      .tactical-card.low-card:hover {
+        border-color: rgba(42,157,143,0.50) !important;
+        box-shadow: 0 8px 28px rgba(42,157,143,0.09), 0 3px 12px rgba(0,0,0,0.38);
+      }
+
+      /* Active / expanded highlight */
+      .tactical-card.is-open {
+        background: rgba(30,46,72,0.98) !important;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.35) !important;
+      }
+
+      /* ── Critical pulse ring ─────────────────────────────────────── */
+      @keyframes critical-ring-pulse {
+        0%, 100% { opacity: 0.90; transform: scale(1);    }
+        50%      { opacity: 0.45; transform: scale(1.40); }
+      }
+      .critical-pulse-ring {
+        display: inline-block;
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        background: #E63946;
+        box-shadow: 0 0 8px #E63946;
+        animation: critical-ring-pulse 1.1s ease-in-out infinite;
+        flex-shrink: 0;
+      }
+
+      /* ── Skeleton shimmer ────────────────────────────────────────── */
+      @keyframes skeleton-shimmer {
+        0%   { background-position: -600px 0; }
+        100% { background-position:  600px 0; }
+      }
+      .skeleton-block {
+        background: linear-gradient(
+          90deg,
+          rgba(69,123,157,0.06) 25%,
+          rgba(69,123,157,0.15) 50%,
+          rgba(69,123,157,0.06) 75%
+        );
+        background-size: 1200px 100%;
+        animation: skeleton-shimmer 1.6s infinite linear;
+        border-radius: 5px;
+      }
+
+      /* ── Inline button spinner ───────────────────────────────────── */
+      @keyframes btn-spin { to { transform: rotate(360deg); } }
+      .btn-spinner {
+        display: inline-block;
+        width: 11px; height: 11px;
+        border: 1.8px solid rgba(255,255,255,0.28);
+        border-top-color: rgba(255,255,255,0.88);
+        border-radius: 50%;
+        animation: btn-spin 0.65s linear infinite;
+        flex-shrink: 0;
+      }
+
+      /* ── Weather HUD expanded forecasts ─────────────────────────── */
+      .forecast-slot {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        flex: 1;
+        padding: 6px 2px;
+        border-radius: 8px;
+        transition: background 0.15s;
+        cursor: default;
+      }
+      .forecast-slot:hover {
+        background: rgba(69,123,157,0.10);
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      const el = document.getElementById(ID);
+      if (el) el.remove();
+    };
+  }, []);
+  return null;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // MAP UTILITY HOOKS
@@ -168,8 +303,8 @@ function MapUpdater({ center }) {
 
 /**
  * MapClickCapture
- *   active=true  → incident-pinning mode  → calls onCapture(lat, lng)
- *   active=false → reverse-geocode mode   → calls onGeocode("lat,lng")
+ *   active=true  → incident-pinning mode → calls onCapture(lat, lng)
+ *   active=false → reverse-geocode mode  → calls onGeocode("lat,lng")
  */
 function MapClickCapture({ active, onCapture, onGeocode }) {
   useMapEvents({
@@ -201,30 +336,30 @@ function TopNav({ user, onLogout, onAnalytics, onLogoClick }) {
       display: "flex", alignItems: "center",
       padding: "0 20px", gap: 14,
     }}>
-      {/* Logo — enterprise shield, navigates home */}
+      {/* Shield logo — navigates home */}
       <div
         onClick={onLogoClick}
         style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
         title="Return to Home"
       >
         <ShieldLogo size={22} />
-        <div>
-          <div style={{
-            fontFamily: "var(--font-display)", fontWeight: 700,
-            fontSize: 14, letterSpacing: 3, color: C.text,
-          }}>
-            SENTINEL
-          </div>
-        </div>
+        <span style={{
+          fontFamily: "var(--font-display)", fontWeight: 700,
+          fontSize: 14, letterSpacing: 3, color: C.text,
+        }}>
+          SENTINEL
+        </span>
       </div>
 
-      {/* Live status dot */}
+      {/* Live indicator */}
       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
         <span className="status-dot live" />
         <span style={{
           fontFamily: "var(--font-mono)", fontSize: 9,
           color: C.green, letterSpacing: 2, textTransform: "uppercase",
-        }}>Live</span>
+        }}>
+          Live
+        </span>
       </div>
 
       <div style={{ flex: 1 }} />
@@ -290,7 +425,7 @@ export default function Dashboard() {
   const [activeLayer, setActiveLayer]     = useState(null);
   const [showSafeZones, setShowSafeZones] = useState(true);
 
-  // ── Fire image detection — available to ALL roles ──
+  // ── Fire image detection — ALL roles ──
   const [fireResult, setFireResult]   = useState(null);
   const [loadingFire, setLoadingFire] = useState(false);
 
@@ -308,12 +443,16 @@ export default function Dashboard() {
   const [capturedLatLon, setCapturedLatLon]   = useState(null);
 
   // ── Incident history ──
-  const [history, setHistory] = useState([]);
+  const [history, setHistory]               = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
 
-  // ── Initial load ──────────────────────────────────────────────
+  // ── Report PDF loading ──
+  const [loadingReport, setLoadingReport] = useState(false);
+
+  // ── Initial load ──────────────────────────────────────────────────
   useEffect(() => {
     const initializeDashboard = async () => {
-      let startingCity = "Pune"; // ultimate fallback
+      let startingCity = "Pune";
       try {
         const res = await authFetch("/me");
         if (res.ok) {
@@ -340,14 +479,16 @@ export default function Dashboard() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // ── API helpers ────────────────────────────────────────────────
+  // ── API helpers ───────────────────────────────────────────────────
 
   const fetchHistory = async () => {
+    setHistoryLoading(true);
     try {
       const res = await authFetch("/history");
       const d   = await res.json();
       setHistory(Array.isArray(d) ? d : []);
     } catch { /* silent */ }
+    finally { setHistoryLoading(false); }
   };
 
   const fetchPendingIncidents = async () => {
@@ -438,6 +579,7 @@ export default function Dashboard() {
   // PDF Situation Report — POST /download-report
   const handleDownloadReport = async () => {
     if (!data) { alert("Search a city first to generate a report."); return; }
+    setLoadingReport(true);
     try {
       const res = await authFetch("/download-report", {
         method: "POST",
@@ -452,6 +594,7 @@ export default function Dashboard() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) { alert(err.message); }
+    finally { setLoadingReport(false); }
   };
 
   const handleInputChange = (e) => {
@@ -465,7 +608,7 @@ export default function Dashboard() {
     setShowSuggestions(val.length > 0);
   };
 
-  // ── Derived values ─────────────────────────────────────────────
+  // ── Derived values ────────────────────────────────────────────────
   const mapCenter = data
     ? [data.weather.location.lat, data.weather.location.lon]
     : [20.5937, 78.9629];
@@ -473,596 +616,807 @@ export default function Dashboard() {
   const seismic = data?.seismic_risk ?? null;
   const aqi     = data?.aqi_calculated ?? 0;
 
-  // AQI colour — enterprise palette, no neon
   const aqiColor =
     aqi <= 50  ? C.green  :
-    aqi <= 100 ? "#A3BE8C" :  // muted sage
+    aqi <= 100 ? "#A3BE8C" :
     aqi <= 150 ? C.amber  :
     aqi <= 200 ? C.crimson:
-                 "#8B4A6B";   // deep purple-rose for hazardous
+                 "#8B4A6B";
 
-  // ── Render ─────────────────────────────────────────────────────
+  // ── Framer Motion variants ────────────────────────────────────────
+  const staggerContainer = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.09, delayChildren: 0.04 } },
+  };
+  const fadeUpChild = {
+    hidden: { opacity: 0, y: 18 },
+    show:   { opacity: 1, y: 0, transition: { type: "spring", stiffness: 280, damping: 26 } },
+  };
+
+  // ── Render ────────────────────────────────────────────────────────
   return (
-    <div style={{
-      display: "flex", flexDirection: "column",
-      height: "100vh",
-      background: "var(--bg-void)",
-      paddingTop: 52,
-    }}>
-      <TopNav
-        user={user}
-        onLogout={() => { logout(); navigate("/"); }}
-        onAnalytics={() => navigate("/analytics")}
-        onLogoClick={() => navigate("/")}
-      />
+    <>
+      <DashboardStyles />
+      <div style={{
+        display: "flex", flexDirection: "column",
+        height: "100vh",
+        background: "var(--bg-void)",
+        paddingTop: 52,
+      }}>
+        <TopNav
+          user={user}
+          onLogout={() => { logout(); navigate("/"); }}
+          onAnalytics={() => navigate("/analytics")}
+          onLogoClick={() => navigate("/")}
+        />
 
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-
-        {/* ════════════════════════════════════════
-            LEFT SIDEBAR — 380px, always visible
-            ════════════════════════════════════════ */}
-        <aside style={{
-          width: 380, flexShrink: 0,
-          background: "rgba(11,19,32,0.96)",
-          borderRight: `1px solid ${C.border}`,
-          display: "flex", flexDirection: "column",
-          overflowY: "auto", overflowX: "hidden",
-        }}>
-
-          {/* Admin tab bar */}
-          {user?.role === "admin" && (
-            <div style={{
-              display: "flex",
-              borderBottom: `1px solid ${C.border}`,
-              flexShrink: 0,
-            }}>
-              {[
-                { id: "monitor", label: "Monitor" },
-                { id: "queue",   label: `Queue (${pendingIncidents.length})` },
-              ].map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setActiveTab(t.id)}
-                  style={{
-                    flex: 1, padding: "13px 0",
-                    background: "transparent", border: "none",
-                    borderBottom: activeTab === t.id
-                      ? `2px solid ${C.teal}` : "2px solid transparent",
-                    color: activeTab === t.id ? C.teal : C.dim,
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 10, letterSpacing: 2,
-                    cursor: "pointer", transition: "all 0.2s",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* ─ Monitor tab ─ */}
-          {activeTab === "monitor" && (
-            <div style={{
+        <motion.div
+          variants={staggerContainer}
+          initial="hidden"
+          animate="show"
+          style={{ display: "flex", flex: 1, overflow: "hidden" }}
+        >
+          {/* ══════════════════════════════════════════════════════════
+              LEFT SIDEBAR — 380 px, always visible
+              ══════════════════════════════════════════════════════════ */}
+          <motion.aside
+            variants={fadeUpChild}
+            style={{
+              width: 380, flexShrink: 0,
+              background: "rgba(11,19,32,0.96)",
+              borderRight: `1px solid ${C.border}`,
               display: "flex", flexDirection: "column",
-              padding: "14px 14px 20px", gap: 12,
-            }}>
-
-              {/* ── SEARCH BAR ── */}
-              <div style={{ position: "relative" }} ref={suggRef}>
-                <div style={{ position: "relative" }}>
-                  <span style={{
-                    position: "absolute", left: 13, top: "50%",
-                    transform: "translateY(-50%)",
-                    color: C.dim, fontSize: 14, pointerEvents: "none",
-                  }}>
-                    🔍
-                  </span>
-                  <input
-                    className="s-input"
-                    style={{ paddingLeft: 38 }}
-                    placeholder="Search city or click map…"
-                    value={inputValue}
-                    onChange={handleInputChange}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        setShowSuggestions(false);
-                        handleSearch(inputValue);
-                      }
+              overflowY: "auto", overflowX: "hidden",
+            }}
+            className="sentinel-sidebar-scroll"
+          >
+            {/* Admin tab bar */}
+            {user?.role === "admin" && (
+              <div style={{
+                display: "flex",
+                borderBottom: `1px solid ${C.border}`,
+                flexShrink: 0,
+              }}>
+                {[
+                  { id: "monitor", label: "Monitor" },
+                  { id: "queue",   label: `Queue (${pendingIncidents.length})` },
+                ].map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setActiveTab(t.id)}
+                    style={{
+                      flex: 1, padding: "13px 0",
+                      background: "transparent", border: "none",
+                      borderBottom: activeTab === t.id
+                        ? `2px solid ${C.teal}` : "2px solid transparent",
+                      color: activeTab === t.id ? C.teal : C.dim,
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10, letterSpacing: 2,
+                      cursor: "pointer", transition: "all 0.2s",
+                      textTransform: "uppercase",
                     }}
-                  />
-                </div>
-
-                {/* Suggestions dropdown */}
-                {showSuggestions && suggestions.length > 0 && (
-                  <ul style={{
-                    position: "absolute", top: "calc(100% + 4px)",
-                    left: 0, right: 0,
-                    background: C.card,
-                    borderRadius: "var(--radius-md)",
-                    border: `1px solid ${C.borderH}`,
-                    listStyle: "none", zIndex: 600,
-                    maxHeight: 200, overflowY: "auto",
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
-                  }}>
-                    {suggestions.map((s, i) => (
-                      <li
-                        key={i}
-                        onClick={() => {
-                          setInputValue(s);
-                          setShowSuggestions(false);
-                          handleSearch(s);
-                        }}
-                        style={{
-                          padding: "9px 14px", cursor: "pointer",
-                          borderBottom: `1px solid ${C.border}`,
-                          fontSize: 13, color: C.text,
-                          fontFamily: "var(--font-body)",
-                          transition: "background 0.12s",
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.background = "rgba(69,123,157,0.10)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                      >
-                        {s}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
               </div>
+            )}
 
-              {/* Loading feedback */}
-              {loading && (
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-                  <div className="s-spinner" style={{ width: 18, height: 18, flexShrink: 0 }} />
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 9,
-                    color: C.dim, letterSpacing: 2, textTransform: "uppercase",
-                  }}>
-                    Scanning sector…
-                  </span>
+            {/* ─ Monitor tab ─ */}
+            {activeTab === "monitor" && (
+              <div style={{
+                display: "flex", flexDirection: "column",
+                padding: "14px 14px 24px", gap: 12,
+              }}>
+
+                {/* ── SEARCH BAR ── */}
+                <div style={{ position: "relative" }} ref={suggRef}>
+                  <div style={{ position: "relative" }}>
+                    <span style={{
+                      position: "absolute", left: 13, top: "50%",
+                      transform: "translateY(-50%)",
+                      color: C.dim, fontSize: 14, pointerEvents: "none",
+                    }}>
+                      🔍
+                    </span>
+                    <input
+                      className="s-input"
+                      style={{ paddingLeft: 38 }}
+                      placeholder="Search city or click map…"
+                      value={inputValue}
+                      onChange={handleInputChange}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          setShowSuggestions(false);
+                          handleSearch(inputValue);
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {/* Suggestions dropdown */}
+                  {showSuggestions && suggestions.length > 0 && (
+                    <ul style={{
+                      position: "absolute", top: "calc(100% + 4px)",
+                      left: 0, right: 0,
+                      background: C.card,
+                      borderRadius: "var(--radius-md)",
+                      border: `1px solid ${C.borderH}`,
+                      listStyle: "none", zIndex: 600,
+                      maxHeight: 200, overflowY: "auto",
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+                    }}>
+                      {suggestions.map((s, i) => (
+                        <li
+                          key={i}
+                          onClick={() => {
+                            setInputValue(s);
+                            setShowSuggestions(false);
+                            handleSearch(s);
+                          }}
+                          style={{
+                            padding: "9px 14px", cursor: "pointer",
+                            borderBottom: `1px solid ${C.border}`,
+                            fontSize: 13, color: C.text,
+                            fontFamily: "var(--font-body)",
+                            transition: "background 0.12s",
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.background = "rgba(69,123,157,0.10)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                        >
+                          {s}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-              )}
 
-              {/* Active sector indicator */}
-              {data && !loading && (
+                {/* Loading feedback */}
+                {loading && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0" }}>
+                    <div className="s-spinner" style={{ width: 18, height: 18, flexShrink: 0 }} />
+                    <span style={{
+                      fontFamily: "var(--font-mono)", fontSize: 9,
+                      color: C.dim, letterSpacing: 2, textTransform: "uppercase",
+                    }}>
+                      Scanning sector…
+                    </span>
+                  </div>
+                )}
+
+                {/* Active sector indicator */}
+                {data && !loading && (
+                  <div style={{
+                    padding: "7px 12px", borderRadius: "var(--radius-sm)",
+                    background: "rgba(69,123,157,0.08)",
+                    border: `1px solid ${C.border}`,
+                    display: "flex", alignItems: "center", gap: 8,
+                  }}>
+                    <span className="status-dot live" />
+                    <span style={{
+                      fontFamily: "var(--font-mono)", fontSize: 9,
+                      color: C.teal, letterSpacing: 1.5, textTransform: "uppercase",
+                    }}>
+                      Monitoring: {data.weather.location.name}
+                    </span>
+                  </div>
+                )}
+
+                {/* ══ AERIAL FIRE INTELLIGENCE — ALL ROLES ══ */}
+                <SectionDivider label="Aerial Fire Intelligence" />
+
+                <FireUploadPanel
+                  fireResult={fireResult}
+                  loadingFire={loadingFire}
+                  handleFireUpload={handleFireUpload}
+                />
+
+                {/* ══ DRONE VIDEO — ADMIN ONLY ══ */}
+                {user?.role === "admin" && (
+                  <>
+                    <SectionDivider label="Drone Video Analysis" />
+                    <VideoUploadPanel
+                      videoResult={videoResult}
+                      loadingVideo={loadingVideo}
+                      handleVideoUpload={handleVideoUpload}
+                    />
+                  </>
+                )}
+
+                {/* ══ REPORT INCIDENT — PUBLIC ONLY ══ */}
+                {user?.role !== "admin" && (
+                  <>
+                    <SectionDivider label="Crowdsource Report" />
+                    <PublicReportPanel
+                      onOpenReportModal={() => {
+                        setCapturingLatLon(true);
+                        setShowReportModal(false);
+                      }}
+                    />
+                  </>
+                )}
+
+                {/* ══ INCIDENT HISTORY — ACCORDION TACTICAL CARDS ══ */}
+                <SectionDivider label="Recent Verified Incidents" />
+
+                <IncidentHistory
+                  history={history}
+                  loading={historyLoading}
+                />
+
+              </div>
+            )}
+
+            {/* ─ Admin Approval Queue ─ */}
+            {activeTab === "queue" && (
+              <ApprovalQueue
+                incidents={pendingIncidents}
+                onRefresh={fetchPendingIncidents}
+                onVerify={handleVerify}
+              />
+            )}
+          </motion.aside>
+
+          {/* ══════════════════════════════════════════════════════════
+              MAP AREA — flex:1, position:relative
+              All HUDs are absolutely-positioned children.
+              ══════════════════════════════════════════════════════════ */}
+          <motion.div
+            variants={fadeUpChild}
+            style={{ flex: 1, position: "relative", overflow: "hidden" }}
+          >
+            {/* Incident-pinning banner */}
+            {capturingLatLon && (
+              <div style={{
+                position: "absolute", top: 14, left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 1500,
+                background: "rgba(244,162,97,0.12)",
+                border: `1px solid ${C.amber}`,
+                borderRadius: 99, padding: "8px 22px",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10, color: C.amber, letterSpacing: 1.5,
+                pointerEvents: "none",
+                boxShadow: `0 4px 20px rgba(244,162,97,0.18)`,
+                textTransform: "uppercase",
+              }}>
+                📍 Click map to pin incident location
+              </div>
+            )}
+
+            {/* ══ AQI HUD — top-left ══ */}
+            {data && (
+              <div style={{
+                ...GLASS,
+                position: "absolute", top: 16, left: 16,
+                zIndex: 1100, width: 200,
+                padding: "12px 14px",
+                borderLeft: `3px solid ${aqiColor}`,
+              }}>
+                <MonoLabel text="Air Quality Index" />
                 <div style={{
-                  padding: "7px 12px", borderRadius: "var(--radius-sm)",
-                  background: "rgba(69,123,157,0.08)",
-                  border: `1px solid ${C.border}`,
-                  display: "flex", alignItems: "center", gap: 8,
+                  display: "flex", alignItems: "center",
+                  gap: 10, marginTop: 6, marginBottom: 8,
                 }}>
-                  <span className="status-dot live" />
                   <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 9,
-                    color: C.teal, letterSpacing: 1.5, textTransform: "uppercase",
+                    fontFamily: "var(--font-mono)", fontWeight: 700,
+                    fontSize: 30, lineHeight: 1, color: aqiColor,
                   }}>
-                    Monitoring: {data.weather.location.name}
+                    {aqi > 0 ? aqi : "—"}
                   </span>
+                  <div>
+                    <div style={{
+                      fontFamily: "var(--font-body)", fontWeight: 600,
+                      color: aqiColor, fontSize: 12,
+                    }}>
+                      {aqiLabel(aqi)}
+                    </div>
+                    <div
+                      style={{ fontSize: 10, color: C.dim, marginTop: 1, maxWidth: 110 }}
+                      title={data.aqi_source}
+                    >
+                      {(data.aqi_source || "").length > 22
+                        ? data.aqi_source.slice(0, 22) + "…"
+                        : data.aqi_source}
+                    </div>
+                  </div>
                 </div>
-              )}
+                {/* AQI progress bar */}
+                <div style={{
+                  height: 4, borderRadius: 99,
+                  background: "rgba(255,255,255,0.06)", overflow: "hidden",
+                }}>
+                  <div style={{
+                    height: "100%",
+                    width: `${Math.min((aqi / 500) * 100, 100)}%`,
+                    background: `linear-gradient(90deg, ${C.teal}, ${aqiColor})`,
+                    borderRadius: 99, transition: "width 0.8s ease",
+                  }} />
+                </div>
+              </div>
+            )}
 
-              {/* ══ AERIAL FIRE INTELLIGENCE — ALL ROLES ══ */}
-              <SectionDivider label="Aerial Fire Intelligence" />
+            {/* ══ WEATHER HUD — top-right, collapsible ══ */}
+            {data && (
+              <WeatherHUD
+                data={data}
+                onDownloadReport={handleDownloadReport}
+                loadingReport={loadingReport}
+              />
+            )}
 
-              <FireUploadPanel
-                fireResult={fireResult}
-                loadingFire={loadingFire}
-                handleFireUpload={handleFireUpload}
+            {/* ══ SEISMIC HUD — bottom-left ══ */}
+            {data && (
+              <SeismicHUD seismic={seismic} />
+            )}
+
+            {/* ══ LEAFLET MAP ══ */}
+            <MapContainer
+              center={mapCenter}
+              zoom={5}
+              style={{ height: "100%", width: "100%" }}
+              zoomControl={false}
+            >
+              {/* Dark CartoDB base tile */}
+              <TileLayer
+                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                attribution='&copy; <a href="https://carto.com/">CARTO</a>'
               />
 
-              {/* ══ DRONE VIDEO — ADMIN ONLY ══ */}
-              {user?.role === "admin" && (
+              {/* Weather overlay layers */}
+              {activeLayer === "clouds" && (
+                <TileLayer url={`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
+              )}
+              {activeLayer === "rain" && (
+                <TileLayer url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
+              )}
+              {activeLayer === "temp" && (
+                <TileLayer url={`https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
+              )}
+              {activeLayer === "wind" && (
+                <TileLayer url={`https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
+              )}
+
+              {/*
+                MapClickCapture:
+                  active=true  → incident pin (public report flow)
+                  active=false → reverse geocode any map click
+              */}
+              <MapClickCapture
+                active={capturingLatLon}
+                onCapture={(lat, lng) => {
+                  setCapturedLatLon({ lat, lon: lng });
+                  setCapturingLatLon(false);
+                  setShowReportModal(true);
+                }}
+                onGeocode={(query) => handleSearch(query)}
+              />
+
+              {/* Monitored city — pulse teal */}
+              {data && (
                 <>
-                  <SectionDivider label="Drone Video Analysis" />
-                  <VideoUploadPanel
-                    videoResult={videoResult}
-                    loadingVideo={loadingVideo}
-                    handleVideoUpload={handleVideoUpload}
+                  <Marker
+                    position={[data.weather.location.lat, data.weather.location.lon]}
+                    icon={PulseBlueIcon}
+                  >
+                    <Popup>
+                      <strong style={{ color: C.teal }}>
+                        📍 {data.weather.location.name}
+                      </strong>
+                      <br />
+                      <span style={{ color: C.muted, fontSize: 11 }}>
+                        Monitored Sector
+                      </span>
+                    </Popup>
+                  </Marker>
+                  <MapUpdater
+                    center={[data.weather.location.lat, data.weather.location.lon]}
                   />
                 </>
               )}
 
-              {/* ══ REPORT INCIDENT — PUBLIC ONLY ══ */}
-              {user?.role !== "admin" && (
+              {/* Seismic epicentre — crimson pin + 150 km danger circle */}
+              {seismic && (
                 <>
-                  <SectionDivider label="Crowdsource Report" />
-                  <PublicReportPanel
-                    onOpenReportModal={() => {
-                      setCapturingLatLon(true);
-                      setShowReportModal(false);
+                  <Circle
+                    center={seismic.coords}
+                    radius={150000}
+                    pathOptions={{
+                      color: C.crimson, fillColor: C.crimson,
+                      fillOpacity: 0.07, dashArray: "8 4", weight: 1.5,
                     }}
                   />
+                  <Marker position={seismic.coords} icon={RedPinIcon}>
+                    <Popup>
+                      <strong style={{ color: C.crimson }}>⚠ Seismic Alert</strong>
+                      <br />
+                      {seismic.user_message}
+                      <br />
+                      <small style={{ color: C.muted }}>{seismic.location}</small>
+                    </Popup>
+                  </Marker>
                 </>
               )}
 
-              {/* ══ INCIDENT HISTORY ══ */}
-              <SectionDivider label="Recent Verified Incidents" />
-
-              <IncidentHistory history={history} />
-
-              {history.length === 0 && (
-                <div style={{
-                  textAlign: "center", padding: "16px 0",
-                  fontFamily: "var(--font-mono)", fontSize: 9,
-                  letterSpacing: 1.5, color: C.dim,
-                  textTransform: "uppercase",
-                }}>
-                  No verified incidents yet
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ─ Admin Approval Queue ─ */}
-          {activeTab === "queue" && (
-            <ApprovalQueue
-              incidents={pendingIncidents}
-              onRefresh={fetchPendingIncidents}
-              onVerify={handleVerify}
-            />
-          )}
-        </aside>
-
-        {/* ════════════════════════════════════════
-            MAP AREA — flex:1, position:relative
-            HUDs are absolutely positioned children.
-            ════════════════════════════════════════ */}
-        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-
-          {/* Incident-pinning banner */}
-          {capturingLatLon && (
-            <div style={{
-              position: "absolute", top: 14, left: "50%",
-              transform: "translateX(-50%)",
-              zIndex: 1500,
-              background: "rgba(244,162,97,0.12)",
-              border: `1px solid ${C.amber}`,
-              borderRadius: 99, padding: "8px 22px",
-              fontFamily: "var(--font-mono)",
-              fontSize: 10, color: C.amber, letterSpacing: 1.5,
-              pointerEvents: "none",
-              boxShadow: `0 4px 20px rgba(244,162,97,0.18)`,
-              textTransform: "uppercase",
-            }}>
-              📍 Click map to pin incident location
-            </div>
-          )}
-
-          {/* ══ AQI HUD — top-left ══ */}
-          {data && (
-            <div style={{
-              ...GLASS,
-              position: "absolute", top: 16, left: 16,
-              zIndex: 1100, width: 200,
-              padding: "12px 14px",
-              borderLeft: `3px solid ${aqiColor}`,
-            }}>
-              <MonoLabel text="Air Quality Index" />
-              <div style={{
-                display: "flex", alignItems: "center",
-                gap: 10, marginTop: 6, marginBottom: 8,
-              }}>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontWeight: 700,
-                  fontSize: 30, lineHeight: 1, color: aqiColor,
-                }}>
-                  {aqi > 0 ? aqi : "—"}
-                </span>
-                <div>
-                  <div style={{
-                    fontFamily: "var(--font-body)", fontWeight: 600,
-                    color: aqiColor, fontSize: 12,
-                  }}>
-                    {aqiLabel(aqi)}
-                  </div>
-                  <div
-                    style={{ fontSize: 10, color: C.dim, marginTop: 1, maxWidth: 110 }}
-                    title={data.aqi_source}
-                  >
-                    {(data.aqi_source || "").length > 22
-                      ? data.aqi_source.slice(0, 22) + "…"
-                      : data.aqi_source}
-                  </div>
-                </div>
-              </div>
-              {/* Progress bar */}
-              <div style={{
-                height: 4, borderRadius: 99,
-                background: "rgba(255,255,255,0.06)", overflow: "hidden",
-              }}>
-                <div style={{
-                  height: "100%",
-                  width: `${Math.min((aqi / 500) * 100, 100)}%`,
-                  background: `linear-gradient(90deg, ${C.teal}, ${aqiColor})`,
-                  borderRadius: 99, transition: "width 0.8s ease",
-                }} />
-              </div>
-            </div>
-          )}
-
-          {/* ══ WEATHER HUD + PDF — top-right ══ */}
-          {data && (
-            <WeatherHUD data={data} onDownloadReport={handleDownloadReport} />
-          )}
-
-          {/* ══ SEISMIC HUD — bottom-left ══ */}
-          {data && (
-            <SeismicHUD seismic={seismic} />
-          )}
-
-          {/* ══ LEAFLET MAP ══ */}
-          <MapContainer
-            center={mapCenter}
-            zoom={5}
-            style={{ height: "100%", width: "100%" }}
-            zoomControl={false}
-          >
-            {/* Dark CartoDB base tile */}
-            <TileLayer
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-            />
-
-            {/* Weather overlay layers */}
-            {activeLayer === "clouds" && (
-              <TileLayer url={`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
-            )}
-            {activeLayer === "rain" && (
-              <TileLayer url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
-            )}
-            {activeLayer === "temp" && (
-              <TileLayer url={`https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
-            )}
-            {activeLayer === "wind" && (
-              <TileLayer url={`https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />
-            )}
-
-            {/*
-              MapClickCapture:
-                active=true  → pin mode for incident report
-                active=false → reverse-geocode any click via handleSearch
-            */}
-            <MapClickCapture
-              active={capturingLatLon}
-              onCapture={(lat, lng) => {
-                setCapturedLatLon({ lat, lon: lng });
-                setCapturingLatLon(false);
-                setShowReportModal(true);
-              }}
-              onGeocode={(query) => handleSearch(query)}
-            />
-
-            {/* Monitored city — pulse teal */}
-            {data && (
-              <>
-                <Marker
-                  position={[data.weather.location.lat, data.weather.location.lon]}
-                  icon={PulseBlueIcon}
-                >
+              {/* Safe zones — pulse green, toggleable */}
+              {showSafeZones && SAFE_ZONES.map((sz, i) => (
+                <Marker key={`sz-${i}`} position={[sz.lat, sz.lon]} icon={PulseGreenIcon}>
                   <Popup>
-                    <strong style={{ color: C.teal }}>
-                      📍 {data.weather.location.name}
-                    </strong>
+                    <strong style={{ color: C.green }}>🛡 {sz.type}</strong>
                     <br />
-                    <span style={{ color: C.muted, fontSize: 11 }}>
-                      Monitored Sector
-                    </span>
+                    {sz.name}
                   </Popup>
                 </Marker>
-                <MapUpdater
-                  center={[data.weather.location.lat, data.weather.location.lon]}
-                />
-              </>
-            )}
+              ))}
 
-            {/* Seismic epicentre — crimson pin + danger circle */}
-            {seismic && (
-              <>
-                <Circle
-                  center={seismic.coords}
-                  radius={150000}
-                  pathOptions={{
-                    color: C.crimson, fillColor: C.crimson,
-                    fillOpacity: 0.07, dashArray: "8 4", weight: 1.5,
-                  }}
-                />
-                <Marker position={seismic.coords} icon={RedPinIcon}>
-                  <Popup>
-                    <strong style={{ color: C.crimson }}>⚠ Seismic Alert</strong>
-                    <br />
-                    {seismic.user_message}
-                    <br />
-                    <small style={{ color: C.muted }}>{seismic.location}</small>
-                  </Popup>
-                </Marker>
-              </>
-            )}
+              {/* Verified incidents — pulse crimson or amber */}
+              {history.map((inc, i) => {
+                if (!inc.lat || !inc.lon) return null;
+                const critical = inc.severity === "critical" || inc.type === "fire";
+                const icon     = critical ? PulseRedIcon : PulseOrangeIcon;
+                const color    = critical ? C.crimson : C.amber;
+                return (
+                  <Marker key={`inc-${i}`} position={[inc.lat, inc.lon]} icon={icon}>
+                    <Popup>
+                      <strong style={{ color }}>
+                        {inc.type?.toUpperCase() ?? "INCIDENT"}
+                      </strong>
+                      <br />
+                      {inc.location}
+                      <br />
+                      <small style={{ color: C.muted }}>
+                        {inc.severity?.toUpperCase()} ·{" "}
+                        {inc.time ? new Date(inc.time).toLocaleDateString("en-IN") : ""}
+                      </small>
+                    </Popup>
+                  </Marker>
+                );
+              })}
+            </MapContainer>
 
-            {/* Safe zones — pulse green, toggleable */}
-            {showSafeZones && SAFE_ZONES.map((sz, i) => (
-              <Marker key={`sz-${i}`} position={[sz.lat, sz.lon]} icon={PulseGreenIcon}>
-                <Popup>
-                  <strong style={{ color: C.green }}>🛡 {sz.type}</strong>
-                  <br />
-                  {sz.name}
-                </Popup>
-              </Marker>
-            ))}
+            {/* Layer + shelter dock */}
+            <LayerDock
+              activeLayer={activeLayer}
+              setActiveLayer={setActiveLayer}
+              showSafeZones={showSafeZones}
+              setShowSafeZones={setShowSafeZones}
+            />
+          </motion.div>
+        </motion.div>
 
-            {/* Verified incidents — pulse crimson (critical/fire) or amber */}
-            {history.map((inc, i) => {
-              if (!inc.lat || !inc.lon) return null;
-              const critical = inc.severity === "critical" || inc.type === "fire";
-              const icon     = critical ? PulseRedIcon : PulseOrangeIcon;
-              const color    = critical ? C.crimson : C.amber;
-              return (
-                <Marker key={`inc-${i}`} position={[inc.lat, inc.lon]} icon={icon}>
-                  <Popup>
-                    <strong style={{ color }}>
-                      {inc.type?.toUpperCase() ?? "INCIDENT"}
-                    </strong>
-                    <br />
-                    {inc.location}
-                    <br />
-                    <small style={{ color: C.muted }}>
-                      {inc.severity?.toUpperCase()} ·{" "}
-                      {inc.time ? new Date(inc.time).toLocaleDateString("en-IN") : ""}
-                    </small>
-                  </Popup>
-                </Marker>
-              );
-            })}
-          </MapContainer>
-
-          {/* Layer + shelter dock */}
-          <LayerDock
-            activeLayer={activeLayer}
-            setActiveLayer={setActiveLayer}
-            showSafeZones={showSafeZones}
-            setShowSafeZones={setShowSafeZones}
+        {/* Report Incident modal */}
+        {showReportModal && (
+          <ReportIncidentModal
+            capturedLatLon={capturedLatLon}
+            onClose={() => { setShowReportModal(false); setCapturedLatLon(null); }}
+            onSuccess={() => {
+              setShowReportModal(false);
+              setCapturedLatLon(null);
+              fetchHistory();
+            }}
+            currentCity={data?.weather?.location?.name || ""}
           />
-        </div>
+        )}
       </div>
-
-      {/* Report Incident modal */}
-      {showReportModal && (
-        <ReportIncidentModal
-          capturedLatLon={capturedLatLon}
-          onClose={() => { setShowReportModal(false); setCapturedLatLon(null); }}
-          onSuccess={() => {
-            setShowReportModal(false);
-            setCapturedLatLon(null);
-            fetchHistory();
-          }}
-          currentCity={data?.weather?.location?.name || ""}
-        />
-      )}
-    </div>
+    </>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// FLOATING HUDs
+// WEATHER HUD — collapsible spring-physics modal
+//
+// Compact state  (default) : 230 px wide — icon + temp + city
+// Expanded state (on click): 390 px wide — full weather command center
+//   • Humidity / Wind / Feels Like / UV Index / Pressure / Visibility
+//   • 6-slot hourly forecast strip with large icons
+//   • Wind direction badge
+//   • "Generate Situation Report" PDF button with spinner
 // ═══════════════════════════════════════════════════════════════════
 
-// ── Weather HUD (top-right) ──────────────────────────────────────
-function WeatherHUD({ data, onDownloadReport }) {
-  const current  = data.weather.current;
-  const loc      = data.weather.location;
-  const condIcon = `https:${current.condition.icon}`;
-  const forecast = data.weather.forecast?.forecastday?.[0]?.hour || [];
-  const hours    = forecast.filter((_, i) => i % 4 === 0).slice(0, 4);
+function WeatherHUD({ data, onDownloadReport, loadingReport }) {
+  const [expanded, setExpanded]   = useState(false);
+  const [hudLoading, setHudLoading] = useState(true);
+
+  const current  = data?.weather?.current;
+  const loc      = data?.weather?.location;
+  const condIcon = current ? `https:${current.condition.icon}` : null;
+
+  // All hourly slots for the current day, sampled every 3 hours → 6 slots
+  const forecast = data?.weather?.forecast?.forecastday?.[0]?.hour || [];
+  const hours    = forecast.filter((_, i) => i % 3 === 0).slice(0, 6);
+
+  // Brief skeleton on data refresh
+  useEffect(() => {
+    if (data) {
+      setHudLoading(true);
+      const t = setTimeout(() => setHudLoading(false), 550);
+      return () => clearTimeout(t);
+    }
+  }, [data]);
+
+  // Spring config — weighty but snappy
+  const spring = { type: "spring", stiffness: 310, damping: 30, mass: 0.85 };
+
+  // ── Skeleton ──
+  if (hudLoading) {
+    return (
+      <div style={{
+        ...GLASS,
+        position: "absolute", top: 16, right: 16,
+        zIndex: 1100, width: 232, padding: "14px 16px",
+      }}>
+        <div className="skeleton-block" style={{ width: 72, height: 8, marginBottom: 14 }} />
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div className="skeleton-block" style={{ width: 44, height: 44, borderRadius: "50%", flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div className="skeleton-block" style={{ width: "55%", height: 28, marginBottom: 7 }} />
+            <div className="skeleton-block" style={{ width: "80%", height: 9, marginBottom: 5 }} />
+            <div className="skeleton-block" style={{ width: "60%", height: 8 }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{
-      ...GLASS,
-      position: "absolute", top: 16, right: 16,
-      zIndex: 1100, width: 264,
-      padding: "14px 16px",
-    }}>
-      <MonoLabel text="Meteorology" />
-
-      {/* Main weather row */}
+    <motion.div
+      layout
+      transition={spring}
+      style={{
+        ...GLASS,
+        position: "absolute", top: 16, right: 16,
+        zIndex: 1100,
+        width: expanded ? 390 : 232,
+        padding: 0,
+        overflow: "hidden",
+        cursor: expanded ? "default" : "pointer",
+      }}
+      onClick={() => !expanded && setExpanded(true)}
+    >
+      {/* ── COMPACT HEADER — always visible ── */}
       <div style={{
+        padding: expanded ? "14px 16px 8px" : "12px 14px",
         display: "flex", alignItems: "center",
-        gap: 12, marginTop: 8, marginBottom: 10,
+        gap: 10, justifyContent: "space-between",
       }}>
-        <img src={condIcon} alt="" style={{ width: 48, height: 48 }} />
-        <div>
-          <div style={{
-            fontFamily: "var(--font-mono)", fontWeight: 700,
-            fontSize: 34, lineHeight: 1, color: C.text,
-          }}>
-            {Math.round(current.temp_c)}°
-          </div>
-          <div style={{
-            fontFamily: "var(--font-body)", fontSize: 12,
-            color: C.muted, marginTop: 2,
-          }}>
-            {current.condition.text}
-          </div>
-          <div style={{
-            fontFamily: "var(--font-mono)", fontSize: 9,
-            color: C.teal, letterSpacing: 1, marginTop: 1,
-          }}>
-            {loc.name}, {loc.country}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {condIcon && (
+            <motion.img
+              layout="position"
+              src={condIcon} alt=""
+              style={{ width: expanded ? 44 : 36, height: expanded ? 44 : 36, flexShrink: 0 }}
+            />
+          )}
+          <div>
+            <motion.div
+              layout="position"
+              style={{
+                fontFamily: "var(--font-mono)", fontWeight: 700,
+                fontSize: expanded ? 32 : 24, lineHeight: 1, color: C.text,
+              }}
+            >
+              {Math.round(current?.temp_c ?? 0)}°
+            </motion.div>
+            <div style={{
+              fontFamily: "var(--font-body)", fontSize: expanded ? 12 : 11,
+              color: C.muted, marginTop: 2,
+            }}>
+              {current?.condition?.text}
+            </div>
+            <div style={{
+              fontFamily: "var(--font-mono)", fontSize: 8,
+              color: C.teal, letterSpacing: 1, marginTop: 1,
+            }}>
+              {loc?.name}, {loc?.country}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Stat grid — values in Space Mono, labels in DM Sans */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "1fr 1fr 1fr",
-        gap: 6, marginBottom: 10,
-      }}>
-        {[
-          { k: "Humidity",   v: `${current.humidity}%` },
-          { k: "Wind",       v: `${current.wind_kph}k` },
-          { k: "Feels Like", v: `${Math.round(current.feelslike_c)}°` },
-        ].map(({ k, v }) => (
-          <div key={k} style={{
-            background: "rgba(255,255,255,0.04)",
-            borderRadius: "var(--radius-sm)",
-            padding: "6px 4px", textAlign: "center",
+        {/* Toggle button */}
+        {expanded ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); setExpanded(false); }}
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: `1px solid ${C.border}`,
+              borderRadius: "50%",
+              width: 26, height: 26,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", color: C.muted, fontSize: 12,
+              flexShrink: 0, transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.color = C.text; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.05)"; e.currentTarget.style.color = C.muted; }}
+            title="Collapse weather panel"
+          >
+            ✕
+          </button>
+        ) : (
+          <div style={{
+            display: "flex", flexDirection: "column", alignItems: "center",
+            gap: 2, flexShrink: 0,
           }}>
+            <div style={{ width: 12, height: 1.5, background: C.dim, borderRadius: 99 }} />
+            <div style={{ width: 12, height: 1.5, background: C.dim, borderRadius: 99 }} />
             <div style={{
-              fontFamily: "var(--font-mono)", fontWeight: 700,
-              fontSize: 11, color: C.text,
-            }}>{v}</div>
-            <div style={{
-              fontFamily: "var(--font-body)", fontSize: 9,
-              color: C.dim, marginTop: 2,
-            }}>{k}</div>
+              fontFamily: "var(--font-mono)", fontSize: 7,
+              color: C.dim, letterSpacing: 0.5, marginTop: 2,
+            }}>
+              expand
+            </div>
           </div>
-        ))}
+        )}
       </div>
 
-      {/* Hourly forecast strip */}
-      {hours.length > 0 && (
-        <div style={{
-          display: "flex", justifyContent: "space-between",
-          borderTop: `1px solid ${C.border}`,
-          paddingTop: 8, marginBottom: 10,
-        }}>
-          {hours.map((h, i) => {
-            const hr   = new Date(h.time).getHours();
-            const ampm = hr < 12 ? "AM" : "PM";
-            return (
-              <div key={i} style={{ textAlign: "center", flex: 1 }}>
-                <div style={{
-                  fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim,
-                }}>
-                  {hr % 12 || 12}{ampm}
-                </div>
-                <img
-                  src={`https:${h.condition.icon}`} alt=""
-                  style={{ width: 22, height: 22 }}
-                />
-                <div style={{
-                  fontFamily: "var(--font-mono)", fontSize: 10,
-                  color: C.text, fontWeight: 700,
-                }}>
-                  {Math.round(h.temp_c)}°
-                </div>
+      {/* ── EXPANDED BODY — spring height:0 → height:auto ── */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="weather-expanded"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ type: "spring", stiffness: 340, damping: 32, mass: 0.7 }}
+            style={{ overflow: "hidden" }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ padding: "0 16px 16px" }}>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: C.border, marginBottom: 12 }} />
+
+              {/* ── 6-stat grid ── */}
+              <div style={{
+                display: "grid", gridTemplateColumns: "1fr 1fr 1fr",
+                gap: 7, marginBottom: 14,
+              }}>
+                {[
+                  { k: "Humidity",    v: `${current?.humidity ?? "—"}%`                         },
+                  { k: "Wind",        v: `${current?.wind_kph ?? "—"} kph`                      },
+                  { k: "Feels Like",  v: `${Math.round(current?.feelslike_c ?? 0)}°`             },
+                  { k: "UV Index",    v: current?.uv ?? "—"                                      },
+                  { k: "Pressure",    v: `${current?.pressure_mb ?? "—"} mb`                    },
+                  { k: "Visibility",  v: `${current?.vis_km ?? "—"} km`                         },
+                ].map(({ k, v }) => (
+                  <div key={k} style={{
+                    background: "rgba(255,255,255,0.04)",
+                    border: `1px solid ${C.border}`,
+                    borderRadius: "var(--radius-sm)",
+                    padding: "7px 5px", textAlign: "center",
+                  }}>
+                    <div style={{
+                      fontFamily: "var(--font-mono)", fontWeight: 700,
+                      fontSize: 11, color: C.text, lineHeight: 1.2,
+                    }}>{v}</div>
+                    <div style={{
+                      fontFamily: "var(--font-body)", fontSize: 9,
+                      color: C.dim, marginTop: 3, lineHeight: 1.1,
+                    }}>{k}</div>
+                  </div>
+                ))}
               </div>
-            );
-          })}
-        </div>
-      )}
 
-      {/* PDF Situation Report download — always present in Weather HUD */}
-      <button
-        className="s-btn s-btn-ghost"
-        onClick={onDownloadReport}
-        style={{ width: "100%", padding: "8px 0", fontSize: 12 }}
-      >
-        ⬇ Generate Situation Report
-      </button>
-    </div>
+              {/* ── Wind direction badge ── */}
+              {current?.wind_dir && (
+                <div style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "5px 10px",
+                  background: "rgba(69,123,157,0.08)",
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 99, marginBottom: 14,
+                }}>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 9,
+                    color: C.teal, letterSpacing: 1,
+                  }}>
+                    WIND DIR
+                  </span>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 11,
+                    fontWeight: 700, color: C.text,
+                  }}>
+                    {current.wind_dir}
+                  </span>
+                  <span style={{
+                    fontFamily: "var(--font-body)", fontSize: 11,
+                    color: C.muted,
+                  }}>
+                    {current.wind_degree}°
+                  </span>
+                </div>
+              )}
+
+              {/* ── 6-slot hourly forecast strip ── */}
+              {hours.length > 0 && (
+                <>
+                  <div style={{
+                    fontFamily: "var(--font-mono)", fontSize: 8,
+                    color: C.dim, letterSpacing: 2,
+                    textTransform: "uppercase", marginBottom: 8,
+                  }}>
+                    Hourly Forecast
+                  </div>
+                  <div style={{
+                    display: "flex", gap: 4,
+                    borderTop: `1px solid ${C.border}`,
+                    paddingTop: 10, marginBottom: 14,
+                  }}>
+                    {hours.map((h, i) => {
+                      const hr   = new Date(h.time).getHours();
+                      const ampm = hr < 12 ? "AM" : "PM";
+                      const label = `${hr % 12 || 12}${ampm}`;
+                      const isRainy = h.chance_of_rain > 40;
+                      return (
+                        <div
+                          key={i}
+                          className="forecast-slot"
+                        >
+                          <div style={{
+                            fontFamily: "var(--font-mono)", fontSize: 8,
+                            color: C.dim, marginBottom: 4,
+                          }}>
+                            {label}
+                          </div>
+                          <img
+                            src={`https:${h.condition.icon}`} alt=""
+                            style={{ width: 26, height: 26, marginBottom: 3 }}
+                          />
+                          <div style={{
+                            fontFamily: "var(--font-mono)", fontSize: 11,
+                            color: C.text, fontWeight: 700,
+                          }}>
+                            {Math.round(h.temp_c)}°
+                          </div>
+                          {isRainy && (
+                            <div style={{
+                              fontFamily: "var(--font-mono)", fontSize: 7,
+                              color: C.teal, marginTop: 2,
+                            }}>
+                              {h.chance_of_rain}%
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* ── Generate Situation Report — PDF download ── */}
+              <button
+                className="s-btn s-btn-ghost"
+                onClick={onDownloadReport}
+                disabled={loadingReport}
+                style={{
+                  width: "100%", padding: "10px 0", fontSize: 12,
+                  display: "flex", alignItems: "center",
+                  justifyContent: "center", gap: 8,
+                  opacity: loadingReport ? 0.65 : 1,
+                  cursor: loadingReport ? "not-allowed" : "pointer",
+                  transition: "opacity 0.2s",
+                }}
+              >
+                {loadingReport ? (
+                  <>
+                    <span className="btn-spinner" />
+                    Generating report…
+                  </>
+                ) : (
+                  <>⬇ Generate Situation Report</>
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
-// ── Seismic HUD (bottom-left) ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// SEISMIC HUD — bottom-left
+// ═══════════════════════════════════════════════════════════════════
+
 function SeismicHUD({ seismic }) {
   const hasRisk = !!seismic;
 
@@ -1070,8 +1424,8 @@ function SeismicHUD({ seismic }) {
     <div style={{
       ...GLASS,
       position: "absolute",
-      bottom: 80, left: 16,   // clears the layer dock
-      zIndex: 1100, width: 248,
+      bottom: 80, left: 16,
+      zIndex: 1100, width: 250,
       padding: "12px 14px",
       borderLeft: `3px solid ${hasRisk ? C.crimson : C.green}`,
     }}>
@@ -1080,18 +1434,14 @@ function SeismicHUD({ seismic }) {
       {hasRisk ? (
         <div style={{ marginTop: 8 }}>
           {/* Alert header */}
-          <div style={{
-            display: "flex", alignItems: "center", gap: 8, marginBottom: 8,
-          }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <div style={{
               width: 28, height: 28,
               borderRadius: "var(--radius-sm)",
               background: "var(--crimson-dim)",
               display: "flex", alignItems: "center",
               justifyContent: "center", fontSize: 14, flexShrink: 0,
-            }}>
-              ⚠
-            </div>
+            }}>⚠</div>
             <div>
               <div style={{
                 fontFamily: "var(--font-mono)", fontSize: 9,
@@ -1099,31 +1449,26 @@ function SeismicHUD({ seismic }) {
               }}>
                 Elevated Risk
               </div>
-              <div style={{
-                fontFamily: "var(--font-body)", fontSize: 10, color: C.dim,
-              }}>
+              <div style={{ fontFamily: "var(--font-body)", fontSize: 10, color: C.dim }}>
                 {new Date(seismic.time).toLocaleString("en-IN")}
               </div>
             </div>
           </div>
 
-          {/* User-centric message */}
+          {/* User message */}
           <div style={{
             background: "rgba(230,57,70,0.08)",
             border: "1px solid rgba(230,57,70,0.22)",
             borderRadius: "var(--radius-sm)",
             padding: "8px 10px",
             fontFamily: "var(--font-body)",
-            fontSize: 12, color: C.crimson, lineHeight: 1.5,
-            marginBottom: 8,
+            fontSize: 12, color: C.crimson, lineHeight: 1.5, marginBottom: 8,
           }}>
             {seismic.user_message}
           </div>
 
-          {/* Magnitude / distance stats */}
-          <div style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6,
-          }}>
+          {/* Magnitude + Distance stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
             {[
               { k: "Magnitude", v: `M ${seismic.magnitude}` },
               { k: "Distance",  v: `${seismic.distance_km} km` },
@@ -1146,20 +1491,13 @@ function SeismicHUD({ seismic }) {
           </div>
         </div>
       ) : (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, marginTop: 8,
-        }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
           <span style={{ fontSize: 18 }}>🛡</span>
           <div>
-            <div style={{
-              fontFamily: "var(--font-body)", fontWeight: 600,
-              color: C.green, fontSize: 12,
-            }}>
+            <div style={{ fontFamily: "var(--font-body)", fontWeight: 600, color: C.green, fontSize: 12 }}>
               Sector Safe
             </div>
-            <div style={{
-              fontFamily: "var(--font-body)", fontSize: 11, color: C.dim,
-            }}>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: C.dim }}>
               No quake within 150 km · M &gt; 4.5
             </div>
           </div>
@@ -1182,13 +1520,17 @@ function FireUploadPanel({ fireResult, loadingFire, handleFireUpload }) {
           display: "flex", flexDirection: "column", alignItems: "center",
           padding: "16px 0",
           border: `1.5px dashed rgba(230,57,70,0.28)`,
-          borderRadius: "var(--radius-lg)", cursor: "pointer",
+          borderRadius: "var(--radius-lg)",
+          cursor: loadingFire ? "not-allowed" : "pointer",
           background: "rgba(230,57,70,0.03)",
           transition: "background 0.2s, border-color 0.2s",
+          opacity: loadingFire ? 0.72 : 1,
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.background   = "rgba(230,57,70,0.07)";
-          e.currentTarget.style.borderColor  = "rgba(230,57,70,0.55)";
+          if (!loadingFire) {
+            e.currentTarget.style.background   = "rgba(230,57,70,0.07)";
+            e.currentTarget.style.borderColor  = "rgba(230,57,70,0.55)";
+          }
         }}
         onMouseLeave={e => {
           e.currentTarget.style.background   = "rgba(230,57,70,0.03)";
@@ -1208,18 +1550,13 @@ function FireUploadPanel({ fireResult, loadingFire, handleFireUpload }) {
         }}>
           {loadingFire ? "Analysing image…" : "Upload Aerial Image"}
         </span>
-        <span style={{
-          fontFamily: "var(--font-body)", fontSize: 11,
-          color: C.dim, marginTop: 3,
-        }}>
+        <span style={{ fontFamily: "var(--font-body)", fontSize: 11, color: C.dim, marginTop: 3 }}>
           JPG / PNG · MobileNetV2 model
         </span>
       </label>
 
       {loadingFire && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8, padding: "10px 0",
-        }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0" }}>
           <div className="s-spinner" style={{ width: 18, height: 18, flexShrink: 0 }} />
           <span style={{
             fontFamily: "var(--font-mono)", fontSize: 9,
@@ -1244,13 +1581,17 @@ function VideoUploadPanel({ videoResult, loadingVideo, handleVideoUpload }) {
           display: "flex", flexDirection: "column", alignItems: "center",
           padding: "16px 0",
           border: `1.5px dashed rgba(244,162,97,0.28)`,
-          borderRadius: "var(--radius-lg)", cursor: "pointer",
+          borderRadius: "var(--radius-lg)",
+          cursor: loadingVideo ? "not-allowed" : "pointer",
           background: "rgba(244,162,97,0.03)",
           transition: "background 0.2s, border-color 0.2s",
+          opacity: loadingVideo ? 0.72 : 1,
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.background  = "rgba(244,162,97,0.07)";
-          e.currentTarget.style.borderColor = "rgba(244,162,97,0.55)";
+          if (!loadingVideo) {
+            e.currentTarget.style.background  = "rgba(244,162,97,0.07)";
+            e.currentTarget.style.borderColor = "rgba(244,162,97,0.55)";
+          }
         }}
         onMouseLeave={e => {
           e.currentTarget.style.background  = "rgba(244,162,97,0.03)";
@@ -1270,18 +1611,13 @@ function VideoUploadPanel({ videoResult, loadingVideo, handleVideoUpload }) {
         }}>
           {loadingVideo ? "Processing video…" : "Upload .mp4 Feed"}
         </span>
-        <span style={{
-          fontFamily: "var(--font-body)", fontSize: 11,
-          color: C.dim, marginTop: 3,
-        }}>
+        <span style={{ fontFamily: "var(--font-body)", fontSize: 11, color: C.dim, marginTop: 3 }}>
           1 frame / second · OpenCV analysis
         </span>
       </label>
 
       {loadingVideo && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8, padding: "10px 0",
-        }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0" }}>
           <div className="s-spinner" style={{ width: 18, height: 18, flexShrink: 0 }} />
           <span style={{
             fontFamily: "var(--font-mono)", fontSize: 9,
@@ -1303,8 +1639,7 @@ function PublicReportPanel({ onOpenReportModal }) {
     <div>
       <p style={{
         fontFamily: "var(--font-body)",
-        color: C.muted, fontSize: 13,
-        marginBottom: 10, lineHeight: 1.55,
+        color: C.muted, fontSize: 13, marginBottom: 10, lineHeight: 1.55,
       }}>
         Witnessed a fire, flood, or emergency? Pin it on the map —
         an admin will verify before alerts are dispatched.
@@ -1322,12 +1657,12 @@ function PublicReportPanel({ onOpenReportModal }) {
           transition: "background 0.18s, border-color 0.18s",
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.background   = "rgba(244,162,97,0.08)";
-          e.currentTarget.style.borderColor  = C.amber;
+          e.currentTarget.style.background  = "rgba(244,162,97,0.08)";
+          e.currentTarget.style.borderColor = C.amber;
         }}
         onMouseLeave={e => {
-          e.currentTarget.style.background   = "transparent";
-          e.currentTarget.style.borderColor  = "rgba(244,162,97,0.35)";
+          e.currentTarget.style.background  = "transparent";
+          e.currentTarget.style.borderColor = "rgba(244,162,97,0.35)";
         }}
         onClick={onOpenReportModal}
       >
@@ -1337,56 +1672,320 @@ function PublicReportPanel({ onOpenReportModal }) {
   );
 }
 
-// ── Incident History ──────────────────────────────────────────────
-function IncidentHistory({ history }) {
-  if (!history.length) return null;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-      {history.slice(0, 6).map((inc, i) => {
-        const colorVar = TYPE_COLOR[inc.type] || "var(--text-dim)";
-        // For borderLeft we need the resolved literal (CSS vars don't work in border strings in some engines)
-        const borderColor =
-          inc.type === "fire"       ? C.crimson :
-          inc.type === "earthquake" ? C.amber   :
-          inc.type === "flood"      ? C.teal    :
-          inc.type === "cyclone"    ? C.purple  : C.dim;
+// ═══════════════════════════════════════════════════════════════════
+// INCIDENT HISTORY — ACCORDION TACTICAL MISSION CARDS
+//
+// Architecture:
+//   • expandedIdx: only one card is open at a time (accordion logic)
+//   • Compact strip (always visible): icon · location · severity badge
+//   • Expanded body (AnimatePresence height:0→auto):
+//       - Full timestamp
+//       - AI confidence / prefilter score
+//       - Incident notes
+//       - Reported by: inc.reported_by?.name || "System"
+//   • Critical severity: left crimson glow + pulsing ring
+//   • Skeleton shimmer loading state (3 placeholders)
+//   • Radar-icon empty state
+// ═══════════════════════════════════════════════════════════════════
 
-        return (
-          <div key={i} style={{
-            padding: "8px 10px",
-            background: "rgba(255,255,255,0.02)",
-            borderRadius: "var(--radius-sm)",
-            borderLeft: `2px solid ${borderColor}`,
+function IncidentHistory({ history, loading }) {
+  const [expandedIdx, setExpandedIdx] = useState(null);
+
+  const toggle = (i) => setExpandedIdx(prev => prev === i ? null : i);
+
+  // ── Skeleton state ──
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {[0, 1, 2].map((n) => (
+          <div key={n} style={{
+            padding: "11px 13px",
+            background: "rgba(22,34,55,0.70)",
+            borderRadius: 10,
+            border: `1px solid ${C.border}`,
+            borderLeft: `3px solid rgba(69,123,157,0.18)`,
           }}>
-            <div style={{
-              display: "flex", justifyContent: "space-between", marginBottom: 2,
-            }}>
-              <span style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 9, color: borderColor, letterSpacing: 1.2,
-                textTransform: "uppercase",
-              }}>
-                {inc.type ?? "Incident"}
-              </span>
-              <span style={{
-                fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim,
-              }}>
-                {inc.time ? new Date(inc.time).toLocaleDateString("en-IN") : ""}
-              </span>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 9 }}>
+              <div className="skeleton-block" style={{ width: 65, height: 8 }} />
+              <div className="skeleton-block" style={{ width: 42, height: 8 }} />
             </div>
-            <div style={{
-              fontFamily: "var(--font-body)", fontSize: 12, color: C.text,
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }}>
-              {inc.location}
-            </div>
-            <div style={{
-              fontFamily: "var(--font-mono)", fontSize: 8,
-              color: C.dim, marginTop: 2, textTransform: "uppercase",
-            }}>
-              {inc.severity}
+            <div className="skeleton-block" style={{ width: "72%", height: 13, marginBottom: 8 }} />
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div className="skeleton-block" style={{ width: 52, height: 8 }} />
+              <div className="skeleton-block" style={{ width: 88, height: 8 }} />
             </div>
           </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── Empty state ──
+  if (!history.length) {
+    return (
+      <div style={{
+        display: "flex", flexDirection: "column", alignItems: "center",
+        padding: "28px 16px 22px",
+        background: "rgba(22,34,55,0.38)",
+        borderRadius: 12,
+        border: `1px dashed rgba(69,123,157,0.17)`,
+        gap: 10,
+      }}>
+        {/* Muted radar icon */}
+        <svg width="42" height="42" viewBox="0 0 42 42" fill="none" aria-hidden="true">
+          <circle cx="21" cy="21" r="19" stroke={C.border} strokeWidth="1.5" />
+          <circle cx="21" cy="21" r="13" stroke={C.border} strokeWidth="1" />
+          <circle cx="21" cy="21" r="7"  stroke={C.border} strokeWidth="1" />
+          <circle cx="21" cy="21" r="2"  fill={C.dim} />
+          <line x1="21" y1="21" x2="34" y2="8" stroke={C.dim} strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+        <div style={{
+          fontFamily: "var(--font-mono)", fontSize: 9,
+          color: C.dim, letterSpacing: 2, textTransform: "uppercase",
+          textAlign: "center", lineHeight: 1.7,
+        }}>
+          No active incidents detected<br />in the current sector
+        </div>
+        <div style={{ fontFamily: "var(--font-body)", fontSize: 11, color: C.dim, textAlign: "center" }}>
+          Monitoring all feeds — sector is clear.
+        </div>
+      </div>
+    );
+  }
+
+  // ── Accordion cards ──
+  const cardClass = (sev) => {
+    switch (sev) {
+      case "critical": return "tactical-card critical-card";
+      case "high":     return "tactical-card high-card";
+      case "moderate": return "tactical-card moderate-card";
+      default:         return "tactical-card low-card";
+    }
+  };
+
+  const borderColor = (inc) =>
+    inc.type === "fire"       ? C.crimson :
+    inc.type === "earthquake" ? C.amber   :
+    inc.type === "flood"      ? C.teal    :
+    inc.type === "cyclone"    ? C.purple  : C.dim;
+
+  const sevColor = (sev) => SEV_COLOR[sev] || C.dim;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+      {history.slice(0, 8).map((inc, i) => {
+        const isOpen     = expandedIdx === i;
+        const isCritical = inc.severity === "critical";
+        const bc         = borderColor(inc);
+        const sc         = sevColor(inc.severity);
+        // Reporter name from JOIN: reported_by?.name with optional chaining safety
+        const reporter   = inc.reported_by?.name || null;
+
+        return (
+          <motion.div
+            key={i}
+            className={`${cardClass(inc.severity)}${isOpen ? " is-open" : ""}`}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.055, type: "spring", stiffness: 300, damping: 28 }}
+            style={{ borderLeftColor: bc }}
+            onClick={() => toggle(i)}
+          >
+            {/* ── Compact strip (always visible) ── */}
+            <div style={{ padding: "10px 12px" }}>
+
+              {/* Row 1: Type icon + label — date */}
+              <div style={{
+                display: "flex", justifyContent: "space-between",
+                alignItems: "center", marginBottom: 5,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {isCritical && <span className="critical-pulse-ring" />}
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 8,
+                    color: bc, letterSpacing: 1.5, textTransform: "uppercase",
+                  }}>
+                    {TYPE_ICON[inc.type] || "📋"} {inc.type ?? "Incident"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim,
+                  }}>
+                    {inc.time
+                      ? new Date(inc.time).toLocaleDateString("en-IN", {
+                          day: "2-digit", month: "short",
+                        })
+                      : "—"}
+                  </span>
+                  {/* Chevron indicator */}
+                  <motion.span
+                    animate={{ rotate: isOpen ? 180 : 0 }}
+                    transition={{ duration: 0.22 }}
+                    style={{
+                      display: "inline-block",
+                      fontFamily: "var(--font-mono)", fontSize: 8,
+                      color: C.dim, lineHeight: 1, userSelect: "none",
+                    }}
+                  >
+                    ▾
+                  </motion.span>
+                </div>
+              </div>
+
+              {/* Row 2: Location */}
+              <div style={{
+                fontFamily: "var(--font-display)", fontWeight: 600,
+                fontSize: 13, color: C.text,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                marginBottom: 6,
+              }}>
+                {inc.location || "Unknown Location"}
+              </div>
+
+              {/* Row 3: Severity badge + reporter name */}
+              <div style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+              }}>
+                {/* Severity chip */}
+                <div style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  padding: "2px 7px", borderRadius: 99,
+                  background: `${sc}18`, border: `1px solid ${sc}35`,
+                }}>
+                  <div style={{
+                    width: 5, height: 5, borderRadius: "50%", background: sc,
+                    flexShrink: 0,
+                    boxShadow: isCritical ? `0 0 5px ${sc}` : "none",
+                  }} />
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 8,
+                    color: sc, letterSpacing: 1, textTransform: "uppercase",
+                  }}>
+                    {inc.severity || "Unknown"}
+                  </span>
+                </div>
+
+                {/* Reporter (if available from JOIN) */}
+                {reporter && (
+                  <span style={{
+                    fontFamily: "var(--font-body)", fontSize: 10, color: C.dim,
+                    overflow: "hidden", textOverflow: "ellipsis",
+                    whiteSpace: "nowrap", maxWidth: 130,
+                  }}>
+                    by <span style={{ color: C.muted }}>{reporter}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* ── Expanded body (accordion) ── */}
+            <AnimatePresence initial={false}>
+              {isOpen && (
+                <motion.div
+                  key={`expanded-${i}`}
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ type: "spring", stiffness: 360, damping: 34, mass: 0.65 }}
+                  style={{ overflow: "hidden" }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <div style={{
+                    padding: "0 12px 12px",
+                    borderTop: `1px solid rgba(69,123,157,0.12)`,
+                    marginTop: 0,
+                  }}>
+                    <div style={{ height: 10 }} />
+
+                    {/* Full timestamp */}
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 7, marginBottom: 8,
+                    }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim, letterSpacing: 1 }}>
+                        DETECTED
+                      </span>
+                      <span style={{
+                        fontFamily: "var(--font-mono)", fontSize: 9, color: C.muted,
+                      }}>
+                        {inc.time
+                          ? new Date(inc.time).toLocaleString("en-IN", {
+                              day: "2-digit", month: "short", year: "numeric",
+                              hour: "2-digit", minute: "2-digit",
+                            })
+                          : "—"}
+                      </span>
+                    </div>
+
+                    {/* AI Confidence / prefilter */}
+                    {(inc.confidence || inc.prefilter_score) && (
+                      <div style={{
+                        background: "rgba(69,123,157,0.07)",
+                        border: `1px solid ${C.border}`,
+                        borderRadius: "var(--radius-sm)",
+                        padding: "7px 10px", marginBottom: 8,
+                      }}>
+                        <div style={{
+                          fontFamily: "var(--font-mono)", fontSize: 8,
+                          color: C.dim, letterSpacing: 1,
+                          textTransform: "uppercase", marginBottom: 4,
+                        }}>
+                          AI Metrics
+                        </div>
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          {inc.confidence && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: C.muted }}>
+                              CONF: <strong style={{ color: C.text }}>{inc.confidence}</strong>
+                            </span>
+                          )}
+                          {inc.prefilter_score && (
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: C.muted }}>
+                              PREFILTER: <strong style={{ color: C.text }}>{inc.prefilter_score}</strong>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Notes */}
+                    {inc.notes && (
+                      <div style={{
+                        fontFamily: "var(--font-body)", fontSize: 12,
+                        color: C.muted, lineHeight: 1.6, marginBottom: 8,
+                        fontStyle: "italic",
+                      }}>
+                        "{inc.notes}"
+                      </div>
+                    )}
+
+                    {/* Reporter — prominent in expanded view */}
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 7,
+                      padding: "6px 10px",
+                      background: "rgba(255,255,255,0.025)",
+                      borderRadius: "var(--radius-sm)",
+                      border: `1px solid ${C.border}`,
+                    }}>
+                      <span style={{ fontSize: 13 }}>👤</span>
+                      <div>
+                        <span style={{
+                          fontFamily: "var(--font-body)", fontSize: 10, color: C.dim,
+                        }}>
+                          Reported by{" "}
+                        </span>
+                        <span style={{
+                          fontFamily: "var(--font-body)", fontSize: 12,
+                          fontWeight: 600, color: C.muted,
+                        }}>
+                          {inc.reported_by?.name || "System"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
         );
       })}
     </div>
@@ -1396,35 +1995,26 @@ function IncidentHistory({ history }) {
 // ═══════════════════════════════════════════════════════════════════
 // FIRE RESULT BADGE
 // ═══════════════════════════════════════════════════════════════════
+
 function FireResultBadge({ result }) {
   const isFire = result.result?.includes("FIRE");
   return (
     <div style={{
       marginTop: 10, padding: "12px 14px",
       borderRadius: "var(--radius-md)",
-      background: isFire
-        ? "rgba(230,57,70,0.10)"
-        : "rgba(42,157,143,0.08)",
-      border: `1px solid ${isFire
-        ? "rgba(230,57,70,0.28)"
-        : "rgba(42,157,143,0.25)"}`,
+      background: isFire ? "rgba(230,57,70,0.10)" : "rgba(42,157,143,0.08)",
+      border: `1px solid ${isFire ? "rgba(230,57,70,0.28)" : "rgba(42,157,143,0.25)"}`,
     }}>
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, marginBottom: 5,
-      }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
         <span style={{ fontSize: 18 }}>{isFire ? "🔥" : "✅"}</span>
         <span style={{
-          fontFamily: "var(--font-mono)", fontWeight: 700,
-          fontSize: 13,
+          fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 13,
           color: isFire ? C.crimson : C.green,
         }}>
           {result.result}
         </span>
       </div>
-      <div style={{
-        fontFamily: "var(--font-mono)", fontSize: 9,
-        color: C.muted, lineHeight: 1.7,
-      }}>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: C.muted, lineHeight: 1.7 }}>
         CONFIDENCE: {result.confidence}
         {result.prefilter_score && (
           <><br />PREFILTER: {result.prefilter_score}</>
@@ -1443,21 +2033,19 @@ function FireResultBadge({ result }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// VIDEO TIMELINE
+// VIDEO TIMELINE — Recharts confidence chart
 // ═══════════════════════════════════════════════════════════════════
+
 function VideoTimeline({ result }) {
-  // 1. Safely grab the array, whether the backend calls it 'timeline' or 'fire_frames'
   const rawData = result.timeline || result.fire_frames || [];
 
-  // 2. Map it safely to what Recharts expects without crashing
   const chartData = rawData.map((t) => {
     let conf = 0;
-    if (typeof t.confidence === 'string') {
-      conf = parseFloat(t.confidence.replace('%', '')) || 0; 
-    } else if (typeof t.confidence === 'number') {
+    if (typeof t.confidence === "string") {
+      conf = parseFloat(t.confidence.replace("%", "")) || 0;
+    } else if (typeof t.confidence === "number") {
       conf = +(t.confidence * 100).toFixed(1);
     }
-
     return {
       second:     t.second !== undefined ? t.second : t.frame,
       confidence: conf,
@@ -1469,57 +2057,64 @@ function VideoTimeline({ result }) {
     <div style={{ marginTop: 12 }}>
       {/* Summary pills */}
       <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        <StatPill label="Frames" val={result.total_frames_sampled || result.total_frames_analysed || 0} color="#4DFFB4" />
+        <StatPill
+          label="Frames"
+          val={result.total_frames_sampled || result.total_frames_analysed || 0}
+          color={C.teal}
+        />
         <StatPill
           label="Peak"
           val={result.fire_detected ? "High" : "Low"}
-          color={result.fire_detected ? "#FF4D6D" : "#4DFFB4"}
+          color={result.fire_detected ? C.crimson : C.green}
         />
         <StatPill
           label="Status"
           val={result.fire_detected ? "FIRE" : "CLEAR"}
-          color={result.fire_detected ? "#FF4D6D" : "#4DFFB4"}
+          color={result.fire_detected ? C.crimson : C.green}
         />
       </div>
 
-      {/* Recharts line chart */}
       {chartData.length > 0 && (
-        <div style={{ background: "rgba(0,0,0,0.28)", borderRadius: 8, padding: "10px 4px 6px" }}>
+        <div style={{
+          background: "rgba(0,0,0,0.25)",
+          borderRadius: "var(--radius-md)", padding: "10px 4px 6px",
+          border: `1px solid ${C.border}`,
+        }}>
           <div style={{
-            fontFamily: "'Space Mono', monospace",
-            fontSize: 8, letterSpacing: 1, color: "#3A5068",
-            paddingLeft: 12, marginBottom: 6,
+            fontFamily: "var(--font-mono)", fontSize: 8,
+            letterSpacing: 1, color: C.dim,
+            paddingLeft: 12, marginBottom: 6, textTransform: "uppercase",
           }}>
-            FIRE CONFIDENCE / SECOND (%)
+            Fire Confidence / Second (%)
           </div>
           <ResponsiveContainer width="100%" height={90}>
             <LineChart data={chartData} margin={{ left: 0, right: 6 }}>
               <Tooltip
                 contentStyle={{
-                  background: "#0F1929", border: "1px solid rgba(77,255,180,0.20)",
-                  borderRadius: 6, fontFamily: "'Space Mono', monospace", fontSize: 9,
+                  background: C.card, border: `1px solid ${C.borderH}`,
+                  borderRadius: 6, fontFamily: "'Space Mono', monospace", fontSize: 9, color: C.text,
                 }}
                 labelFormatter={(s) => `Frame ${s}`}
                 formatter={(v) => [`${v}%`, "Confidence"]}
               />
-              <ReferenceLine y={55} stroke="rgba(255,77,109,0.45)" strokeDasharray="4 3" />
+              <ReferenceLine y={55} stroke="rgba(230,57,70,0.45)" strokeDasharray="4 3" />
               <Line
                 type="monotone" dataKey="confidence"
-                stroke="#FFB84D" strokeWidth={2} isAnimationActive={false}
+                stroke={C.amber} strokeWidth={2} isAnimationActive={false}
                 dot={(props) => {
                   const { cx, cy, payload } = props;
                   return payload.fire
-                    ? <circle key={`f${cx}`} cx={cx} cy={cy} r={3} fill="#FF4D6D" />
-                    : <circle key={`s${cx}`} cx={cx} cy={cy} r={2} fill="#4DFFB4" />;
+                    ? <circle key={`f${cx}`} cx={cx} cy={cy} r={3} fill={C.crimson} />
+                    : <circle key={`s${cx}`} cx={cx} cy={cy} r={2} fill={C.teal} />;
                 }}
               />
             </LineChart>
           </ResponsiveContainer>
           <div style={{
-            fontFamily: "'Space Mono', monospace", fontSize: 8,
-            color: "#3A5068", paddingLeft: 12, paddingTop: 3,
+            fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim,
+            paddingLeft: 12, paddingTop: 3,
           }}>
-            🔴 = fire threshold (55%)
+            ● = fire threshold (55%)
           </div>
         </div>
       )}
@@ -1533,16 +2128,10 @@ function StatPill({ label, val, color }) {
       padding: "3px 9px", borderRadius: "var(--radius-sm)",
       background: `${color}18`, border: `1px solid ${color}28`,
     }}>
-      <span style={{
-        fontFamily: "var(--font-mono)", fontSize: 8,
-        color: C.dim, letterSpacing: 1,
-      }}>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 8, color: C.dim, letterSpacing: 1 }}>
         {label}:{" "}
       </span>
-      <span style={{
-        fontFamily: "var(--font-mono)", fontSize: 9,
-        color, fontWeight: 700,
-      }}>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color, fontWeight: 700 }}>
         {val}
       </span>
     </div>
@@ -1552,17 +2141,23 @@ function StatPill({ label, val, color }) {
 // ═══════════════════════════════════════════════════════════════════
 // ADMIN APPROVAL QUEUE
 // ═══════════════════════════════════════════════════════════════════
+
 function ApprovalQueue({ incidents, onRefresh, onVerify }) {
-  const TYPE_ICON = {
-    fire: "🔥", earthquake: "🌍", flood: "🌊", cyclone: "🌀", other: "📋",
+  const [loadingId, setLoadingId]   = useState(null);
+  const [loadingAct, setLoadingAct] = useState(null);
+
+  const handleVerifyClick = async (id, status) => {
+    setLoadingId(id);
+    setLoadingAct(status);
+    await onVerify(id, status);
+    setLoadingId(null);
+    setLoadingAct(null);
   };
 
   return (
     <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Header */}
-      <div style={{
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-      }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <MonoLabel text="Pending Review" />
           <div style={{
@@ -1582,11 +2177,7 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
       </div>
 
       {incidents.length === 0 && (
-        <div style={{
-          textAlign: "center", padding: "36px 0",
-          fontFamily: "var(--font-body)",
-          fontSize: 13, color: C.dim,
-        }}>
+        <div style={{ textAlign: "center", padding: "36px 0", fontFamily: "var(--font-body)", fontSize: 13, color: C.dim }}>
           ✅ No pending incidents
         </div>
       )}
@@ -1598,11 +2189,8 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
           borderLeft: `3px solid ${C.amber}`,
           borderRadius: "var(--radius-md)", padding: 14,
         }}>
-          {/* Incident header */}
-          <div style={{
-            display: "flex", justifyContent: "space-between",
-            alignItems: "flex-start", marginBottom: 8,
-          }}>
+          {/* Header row */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 18 }}>{TYPE_ICON[inc.type] || "📋"}</span>
               <div>
@@ -1640,10 +2228,7 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
           </div>
 
           {inc.notes && (
-            <div style={{
-              fontFamily: "var(--font-body)", fontSize: 12,
-              color: C.muted, marginBottom: 8, lineHeight: 1.5,
-            }}>
+            <div style={{ fontFamily: "var(--font-body)", fontSize: 12, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
               {inc.notes}
             </div>
           )}
@@ -1653,8 +2238,7 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
               src={inc.image_url} alt="Incident evidence"
               style={{
                 width: "100%", height: 110,
-                objectFit: "cover",
-                borderRadius: "var(--radius-sm)", marginBottom: 10,
+                objectFit: "cover", borderRadius: "var(--radius-sm)", marginBottom: 10,
               }}
             />
           )}
@@ -1662,17 +2246,33 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className="s-btn s-btn-primary"
-              style={{ flex: 1, padding: "9px 0", fontSize: 12 }}
-              onClick={() => onVerify(inc.id, "verified")}
+              style={{
+                flex: 1, padding: "9px 0", fontSize: 12,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                opacity: loadingId === inc.id ? 0.72 : 1,
+                cursor: loadingId === inc.id ? "not-allowed" : "pointer",
+              }}
+              disabled={loadingId === inc.id}
+              onClick={() => handleVerifyClick(inc.id, "verified")}
             >
-              ✅ Verify &amp; Alert
+              {loadingId === inc.id && loadingAct === "verified"
+                ? <><span className="btn-spinner" /> Verifying…</>
+                : "✅ Verify & Alert"}
             </button>
             <button
               className="s-btn s-btn-danger"
-              style={{ flex: 1, padding: "9px 0", fontSize: 12 }}
-              onClick={() => onVerify(inc.id, "rejected")}
+              style={{
+                flex: 1, padding: "9px 0", fontSize: 12,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                opacity: loadingId === inc.id ? 0.72 : 1,
+                cursor: loadingId === inc.id ? "not-allowed" : "pointer",
+              }}
+              disabled={loadingId === inc.id}
+              onClick={() => handleVerifyClick(inc.id, "rejected")}
             >
-              ❌ Reject
+              {loadingId === inc.id && loadingAct === "rejected"
+                ? <><span className="btn-spinner" /> Rejecting…</>
+                : "❌ Reject"}
             </button>
           </div>
         </div>
@@ -1682,8 +2282,9 @@ function ApprovalQueue({ incidents, onRefresh, onVerify }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// REPORT INCIDENT MODAL — public flow
+// REPORT INCIDENT MODAL — public flow, spring-physics animated
 // ═══════════════════════════════════════════════════════════════════
+
 function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }) {
   const [form, setForm] = useState({
     type: "fire", location: currentCity, severity: "moderate", notes: "",
@@ -1708,7 +2309,7 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
     }
     if (image) fd.append("image", image);
     try {
-      const res = await authFetch("/incidents/submit", { method: "POST", body: fd });
+      const res = await authFetch("/incidents", { method: "POST", body: fd });
       const d   = await res.json();
       if (!res.ok) throw new Error(d.detail || "Submission failed.");
       onSuccess();
@@ -1725,12 +2326,15 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
       style={{
         position: "fixed", inset: 0, zIndex: 9999,
         background: "rgba(0,0,0,0.75)", backdropFilter: "blur(10px)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 20,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
       }}
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 14 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 14 }}
+        transition={{ type: "spring", stiffness: 340, damping: 30 }}
         style={{
           background: C.card,
           border: `1px solid ${C.borderH}`,
@@ -1739,13 +2343,10 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
           maxHeight: "90vh", overflowY: "auto",
           boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
         }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
       >
         {/* Modal header */}
-        <div style={{
-          display: "flex", justifyContent: "space-between",
-          alignItems: "center", marginBottom: 20,
-        }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div>
             <MonoLabel text="Crowdsource Report" />
             <h2 style={{
@@ -1757,20 +2358,17 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
           </div>
           <button
             onClick={onClose}
-            style={{
-              background: "none", border: "none",
-              color: C.dim, fontSize: 20, cursor: "pointer",
-            }}
-          >✕</button>
+            style={{ background: "none", border: "none", color: C.dim, fontSize: 20, cursor: "pointer" }}
+          >
+            ✕
+          </button>
         </div>
 
-        {/* Pinned coords */}
+        {/* Pinned coords chip */}
         {capturedLatLon && (
           <div style={{
-            padding: "8px 12px", borderRadius: "var(--radius-sm)",
-            marginBottom: 14,
-            background: "rgba(69,123,157,0.08)",
-            border: `1px solid ${C.borderH}`,
+            padding: "8px 12px", borderRadius: "var(--radius-sm)", marginBottom: 14,
+            background: "rgba(69,123,157,0.08)", border: `1px solid ${C.borderH}`,
             fontFamily: "var(--font-mono)", fontSize: 10, color: C.teal,
           }}>
             📍 Pinned: {capturedLatLon.lat.toFixed(4)}, {capturedLatLon.lon.toFixed(4)}
@@ -1780,20 +2378,15 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
         {/* Error */}
         {error && (
           <div style={{
-            padding: "10px 12px", borderRadius: "var(--radius-sm)",
-            marginBottom: 12,
-            background: "var(--crimson-dim)",
-            border: "1px solid rgba(230,57,70,0.28)",
+            padding: "10px 12px", borderRadius: "var(--radius-sm)", marginBottom: 12,
+            background: "var(--crimson-dim)", border: "1px solid rgba(230,57,70,0.28)",
             color: C.crimson, fontSize: 12,
           }}>
             {error}
           </div>
         )}
 
-        <form
-          onSubmit={handleSubmit}
-          style={{ display: "flex", flexDirection: "column", gap: 13 }}
-        >
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 13 }}>
           <div>
             <label className="s-label">Incident Type</label>
             <select className="s-input" name="type" value={form.type} onChange={handleChange}>
@@ -1804,7 +2397,6 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
               <option value="other">📋 Other</option>
             </select>
           </div>
-
           <div>
             <label className="s-label">Location / City</label>
             <input
@@ -1813,7 +2405,6 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
               placeholder="e.g. Mumbai, Dharavi sector" required
             />
           </div>
-
           <div>
             <label className="s-label">Severity</label>
             <select className="s-input" name="severity" value={form.severity} onChange={handleChange}>
@@ -1823,7 +2414,6 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
               <option value="critical">Critical</option>
             </select>
           </div>
-
           <div>
             <label className="s-label">Description</label>
             <textarea
@@ -1833,7 +2423,6 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
               style={{ resize: "vertical", minHeight: 72 }}
             />
           </div>
-
           <div>
             <label className="s-label">Photo Evidence (optional)</label>
             <label style={{
@@ -1843,35 +2432,40 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
               cursor: "pointer", background: "rgba(69,123,157,0.03)",
               transition: "background 0.2s",
             }}
-              onMouseEnter={e => e.currentTarget.style.background = "rgba(69,123,157,0.06)"}
+              onMouseEnter={e => e.currentTarget.style.background = "rgba(69,123,157,0.07)"}
               onMouseLeave={e => e.currentTarget.style.background = "rgba(69,123,157,0.03)"}
             >
-              <input
-                type="file" accept="image/*"
-                style={{ display: "none" }}
-                onChange={(e) => setImage(e.target.files[0])}
-              />
+              <input type="file" accept="image/*" style={{ display: "none" }}
+                onChange={e => setImage(e.target.files[0])} />
               {image
                 ? <span style={{ fontSize: 12, color: C.teal }}>📎 {image.name}</span>
                 : <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 10, color: C.dim,
-                    textTransform: "uppercase",
+                    fontFamily: "var(--font-mono)", fontSize: 10,
+                    color: C.dim, textTransform: "uppercase",
                   }}>
                     + Attach Photo
                   </span>
               }
             </label>
           </div>
-
           <button
             className="s-btn s-btn-primary"
             type="submit" disabled={loading}
-            style={{ padding: "13px 0", fontSize: 13 }}
+            style={{
+              padding: "13px 0", fontSize: 13,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              opacity: loading ? 0.72 : 1,
+              cursor: loading ? "not-allowed" : "pointer",
+            }}
           >
-            {loading ? "Submitting…" : "Submit for Review →"}
+            {loading ? (
+              <><span className="btn-spinner" /> Submitting…</>
+            ) : (
+              "Submit for Review →"
+            )}
           </button>
         </form>
-      </div>
+      </motion.div>
     </div>
   );
 }
@@ -1879,6 +2473,7 @@ function ReportIncidentModal({ capturedLatLon, onClose, onSuccess, currentCity }
 // ═══════════════════════════════════════════════════════════════════
 // LAYER DOCK — floating pill, bottom-center of map
 // ═══════════════════════════════════════════════════════════════════
+
 function LayerDock({ activeLayer, setActiveLayer, showSafeZones, setShowSafeZones }) {
   const layers = [
     { id: "clouds", icon: "☁️",  label: "Clouds" },
@@ -1891,13 +2486,13 @@ function LayerDock({ activeLayer, setActiveLayer, showSafeZones, setShowSafeZone
     <div style={{
       position: "absolute", bottom: 20, left: "50%",
       transform: "translateX(-50%)",
-      background: "rgba(11,19,32,0.94)",
+      background: "rgba(9,16,28,0.94)",
       backdropFilter: "blur(18px)",
       WebkitBackdropFilter: "blur(18px)",
       border: `1px solid ${C.borderH}`,
       borderRadius: 99, padding: "7px 14px",
       display: "flex", gap: 3, zIndex: 1000,
-      boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.50)",
     }}>
       {layers.map((layer) => (
         <button
@@ -1917,12 +2512,10 @@ function LayerDock({ activeLayer, setActiveLayer, showSafeZones, setShowSafeZone
         </button>
       ))}
 
-      {/* Divider */}
       <div style={{ width: 1, background: C.border, margin: "4px 4px" }} />
 
-      {/* Shelters toggle */}
       <button
-        onClick={() => setShowSafeZones((v) => !v)}
+        onClick={() => setShowSafeZones(v => !v)}
         style={{
           background: showSafeZones ? "rgba(42,157,143,0.15)" : "transparent",
           color:      showSafeZones ? C.green : C.muted,
@@ -1944,10 +2537,7 @@ function LayerDock({ activeLayer, setActiveLayer, showSafeZones, setShowSafeZone
 // MICRO UTILITIES
 // ═══════════════════════════════════════════════════════════════════
 
-/**
- * MonoLabel — small uppercase Space Mono category label
- * Used as the section header inside HUDs and sidebar cards.
- */
+/** MonoLabel — uppercase Space Mono category label */
 function MonoLabel({ text }) {
   return (
     <div style={{
@@ -1961,10 +2551,7 @@ function MonoLabel({ text }) {
   );
 }
 
-/**
- * SectionDivider — horizontal rule with centred label.
- * Separates logical groups in the sidebar monitor panel.
- */
+/** SectionDivider — horizontal rule with centred label */
 function SectionDivider({ label }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 0" }}>
@@ -1981,9 +2568,7 @@ function SectionDivider({ label }) {
   );
 }
 
-/**
- * aqiLabel — returns plain-English category for a given AQI value.
- */
+/** aqiLabel — plain-English AQI category */
 function aqiLabel(aqi) {
   if (aqi <= 50)  return "Good";
   if (aqi <= 100) return "Moderate";
@@ -1993,10 +2578,7 @@ function aqiLabel(aqi) {
   return "Hazardous";
 }
 
-/**
- * ShieldLogo — enterprise shield icon that replaced the neon hexagon.
- * Stroke colour uses the teal operational accent (#457B9D).
- */
+/** ShieldLogo — enterprise shield replacing the neon hexagon */
 function ShieldLogo({ size = 32 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">

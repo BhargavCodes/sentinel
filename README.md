@@ -137,7 +137,7 @@ Ensure the following are installed on your system before proceeding:
 ### 1 — Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/sentinel.git
+git clone https://github.com/BhargavCodes/sentinel.git
 cd sentinel
 ```
 

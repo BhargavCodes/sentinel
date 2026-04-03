@@ -29,6 +29,9 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
+import tempfile
+import os
+
 import bcrypt
 import cv2
 import httpx
@@ -56,6 +59,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from supabase import Client, create_client
 from twilio.rest import Client as TwilioClient
+
 
 # =============================================================================
 # ENVIRONMENT & CONFIGURATION
@@ -156,6 +160,11 @@ class TokenResponse(BaseModel):
     role: str
     name: str
 
+
+class UserUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    target_city: Optional[str] = None
 
 # =============================================================================
 # DATABASE CLIENT
@@ -809,13 +818,12 @@ def analyze_fire_characteristics(image_pil: Image.Image) -> dict:
 # PDF REPORT (preserved from v1, updated to use Supabase incident data)
 # =============================================================================
 
-
 class PDFReport(FPDF):
     def header(self):
         self.set_font("Arial", "B", 15)
-        self.cell(0, 10, "SENTINEL — Situation Report", 0, 1, "C")
+        # CHANGED: Replaced the em-dash '—' with a standard hyphen '-'
+        self.cell(0, 10, "SENTINEL - Situation Report", 0, 1, "C")
         self.ln(8)
-
 
 def generate_pdf(
     weather: dict,
@@ -831,22 +839,29 @@ def generate_pdf(
     loc = weather.get("location", {})
     current = weather.get("current", {})
     pdf.set_font("Arial", "B", 14)
-    pdf.cell(200, 10, f"1. Sector Status: {loc.get('name')}, {loc.get('country')}", 0, 1)
+    
+    # Safe encoding helper to strip any weird API characters
+    def safe_str(text):
+        return str(text).encode('latin-1', 'replace').decode('latin-1')
+
+    pdf.cell(200, 10, safe_str(f"1. Sector Status: {loc.get('name')}, {loc.get('country')}"), 0, 1)
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, f"   Temp: {current.get('temp_c')} °C  |  Humidity: {current.get('humidity')}%", 0, 1)
-    pdf.cell(200, 10, f"   Air Quality Index (AQI): {aqi_val if aqi_val > 0 else 'N/A'}", 0, 1)
-    pdf.cell(200, 10, f"   AQI Source: {aqi_source}", 0, 1)
-    pdf.cell(200, 10, f"   Last Updated: {current.get('last_updated', 'N/A')}", 0, 1)
+    # CHANGED: Replaced '°C' with 'C' to prevent encoding crashes
+    pdf.cell(200, 10, safe_str(f"   Temp: {current.get('temp_c')} C  |  Humidity: {current.get('humidity')}%"), 0, 1)
+    pdf.cell(200, 10, safe_str(f"   Air Quality Index (AQI): {aqi_val if aqi_val > 0 else 'N/A'}"), 0, 1)
+    pdf.cell(200, 10, safe_str(f"   AQI Source: {aqi_source}"), 0, 1)
+    pdf.cell(200, 10, safe_str(f"   Last Updated: {current.get('last_updated', 'N/A')}"), 0, 1)
     pdf.ln(5)
 
     pdf.set_font("Arial", "B", 14)
     pdf.cell(200, 10, "2. Seismic Risk Analysis", 0, 1)
     pdf.set_font("Arial", size=12)
     if seismic:
-        pdf.cell(200, 10, f"   STATUS: ELEVATED — {seismic['user_message']}", 0, 1)
-        pdf.cell(200, 10, f"   Magnitude: {seismic['magnitude']}  |  Distance: {seismic['distance_km']} km", 0, 1)
+        # CHANGED: Replaced em-dash
+        pdf.cell(200, 10, safe_str(f"   STATUS: ELEVATED - {seismic['user_message']}"), 0, 1)
+        pdf.cell(200, 10, safe_str(f"   Magnitude: {seismic['magnitude']}  |  Distance: {seismic['distance_km']} km"), 0, 1)
     else:
-        pdf.cell(200, 10, "   Status: STABLE — No threats within 150 km (M > 4.5)", 0, 1)
+        pdf.cell(200, 10, "   Status: STABLE - No threats within 150 km (M > 4.5)", 0, 1)
     pdf.ln(5)
 
     pdf.set_font("Arial", "B", 14)
@@ -854,9 +869,12 @@ def generate_pdf(
     pdf.set_font("Arial", size=10)
     for inc in incidents:
         ts = str(inc.get("time", ""))[:19]
-        pdf.cell(200, 8, f"   [{ts}]  {inc.get('type','?').upper()}  —  {inc.get('location','?')}  ({inc.get('severity','?')})", 0, 1)
+        # CHANGED: Replaced em-dash
+        pdf.cell(200, 8, safe_str(f"   [{ts}]  {inc.get('type','?').upper()}  -  {inc.get('location','?')}  ({inc.get('severity','?')})"), 0, 1)
 
-    filename = f"/tmp/sentinel_report_{uuid.uuid4().hex[:8]}.pdf"
+    temp_dir = tempfile.gettempdir()
+    filename = os.path.join(temp_dir, f"sentinel_report_{uuid.uuid4().hex[:8]}.pdf")
+    
     pdf.output(filename)
     return filename
 
@@ -995,6 +1013,50 @@ async def me(current_user: dict = Depends(get_current_user)):
     """Return the authenticated user's profile (excluding password hash)."""
     return {k: v for k, v in current_user.items() if k != "hashed_password"}
 
+
+# =============================================================================
+# PATCH /me — Update authenticated user's own profile
+# Protected: any authenticated user (public or admin)
+# =============================================================================
+
+@app.patch("/me", tags=["Auth"])
+async def update_me(
+    payload: UserUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """
+    Update the authenticated operator's profile fields.
+    Only non-None fields in the request body are written to the database.
+    Returns the full updated user row (minus password hash).
+    """
+    update_data: dict = {
+        k: v for k, v in payload.model_dump().items() if v is not None
+    }
+
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields provided to update.",
+        )
+
+    result = (
+        db.table("users")
+        .update(update_data)
+        .eq("id", current_user["id"])
+        .execute()
+    )
+
+    if not result.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Profile update failed.",
+        )
+
+    updated = result.data[0]
+    # Strip password hash before returning — never send it to the client
+    updated.pop("hashed_password", None)
+    return {"message": "Profile updated successfully.", "user": updated}
 
 # =============================================================================
 # PASSWORD RESET FLOW  [v2.1 NEW]
@@ -1399,7 +1461,7 @@ async def submit_incident(
     type: str = Form(...),
     location: str = Form(...),
     severity: str = Form(default="moderate"),
-    description: str = Form(default=""),
+    notes: str = Form(default=""),           # <-- Changed to 'notes'
     file: Optional[UploadFile] = File(default=None),
     current_user: dict = Depends(get_current_user),
     db: Client = Depends(get_supabase),
@@ -1425,7 +1487,7 @@ async def submit_incident(
         "type": type,
         "location": location,
         "severity": severity,
-        "description": description,
+        "notes": notes,                      # <-- Changed to 'notes'
         "image_url": image_url,
         "reported_by": current_user["id"],
         "status": "pending",
@@ -1534,12 +1596,12 @@ async def review_incident(
 @app.get("/history", tags=["Incidents"])
 async def get_history(db: Client = Depends(get_supabase)):
     """
-    Return the 10 most recent verified incidents.
-    Maintains backward compatibility with the v1 React frontend.
+    Return the 10 most recent verified incidents, including the reporter's name.
+    The reported_by(name) join resolves the UUID FK to a user display name.
     """
     result = (
         db.table("incidents")
-        .select("id, type, location, severity, time")
+        .select("id, type, location, severity, time, reported_by(name)")
         .eq("status", "verified")
         .order("time", desc=True)
         .limit(10)
@@ -1670,6 +1732,74 @@ async def health():
     }
 
 
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import os
+from dotenv import load_dotenv
+
+# 1. Load your environment variables
+load_dotenv()
+
+# 2. Check if we are in dev mode (defaults to False if not found)
+# =============================================================================
+# GUARDRAIL TESTING (MOCK INJECTION)
+# =============================================================================
+
+# Check if we are in dev mode (defaults to False if not found)
+DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "False") == "True"
+
+class Coordinates(BaseModel):
+    lat: float
+    lon: float
+
+class AnomalyPayload(BaseModel):
+    visual_confidence: float
+    anomaly_type: str
+    coordinates: Coordinates
+
+def check_seismic_guardrail(lat, lon):
+    """
+    Evaluates seismic risk. Uses mock data if DEVELOPMENT_MODE is active.
+    """
+    if DEVELOPMENT_MODE:
+        print("⚠️ DEVELOPMENT MODE ACTIVE: Injecting mock seismic data.")
+        return {
+            "status": "verified",
+            "source": "mock_injection",
+            "data": {
+                "magnitude": 6.2,
+                "distance_km": 45,
+                "location": "45km SE of Pune, India",
+                "alert_level": "critical"
+            }
+        }
+    else:
+        print("🌐 PRODUCTION MODE: Calling live USGS API.")
+        return {"status": "pending", "message": "Live API not implemented in this snippet"}
+
+@app.post("/api/verify-anomaly", tags=["Testing"])
+async def process_visual_anomaly(payload: AnomalyPayload):
+    print(f"📸 Received visual anomaly: {payload.anomaly_type} ({payload.visual_confidence * 100}%)")
+    
+    lat = payload.coordinates.lat
+    lon = payload.coordinates.lon
+    
+    seismic_check = check_seismic_guardrail(lat, lon)
+    
+    if seismic_check["status"] == "verified" and payload.visual_confidence > 0.85:
+        print("🚨 GUARDRAIL PASSED: Environmental data aligns with visual AI.")
+        return {
+            "alert_authorized": True,
+            "message": "Automated Early Warning System Triggered.",
+            "visual_data": payload.model_dump(),
+            "environmental_verification": seismic_check["data"]
+        }
+    
+    return {
+        "alert_authorized": False,
+        "message": "Guardrail failed to verify the threat. Alert suppressed."
+    }
+
 # =============================================================================
 # ENTRY POINT
 # =============================================================================
@@ -1677,3 +1807,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
