@@ -16,3 +16,7 @@ env/
 # Node Modules (Frontend)
 frontend/node_modules/
 frontend/dist/
+
+# Large Data (Do not upload)
+dataset/
+test_images/

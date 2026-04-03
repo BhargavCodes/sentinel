@@ -1,334 +1,575 @@
-// frontend/src/App.jsx
-import React, { useState, useEffect, useRef } from 'react'; 
-import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, useMapEvents } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
+// App.jsx — Sentinel  |  Enterprise Disaster Command Platform
+// Theme: Military-grade enterprise (Palantir / FEMA aesthetic)
+// Colors: Slate-navy backgrounds, Crimson alerts, Amber warnings,
+//         Operational Teal, Safe Green. Zero neon. Zero cyberpunk.
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+import Landing from "./Landing";
+import { LoginPage, RegisterPage, ForgotPasswordPage, ResetPasswordPage } from "./Auth";
+import Dashboard from "./Dashboard";
+import Analytics from "./Analytics";
 
-const BlueIcon = L.icon({ iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png", shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
-const RedIcon = L.icon({ iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png", shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
+// ─────────────────────────────────────────────
+// AUTH CONTEXT
+// ─────────────────────────────────────────────
 
-const OWM_KEY = "0810f8af801a68b40b2a1aa5b5736f6e"; 
-const CITIES_DB = ["New Delhi", "Mumbai", "Bangalore", "Hyderabad", "Chennai", "Kolkata", "Pune", "Jaipur", "Lucknow", "Kanpur", "Nagpur", "Indore", "Thane", "Bhopal", "Visakhapatnam", "Patna", "Vadodara", "Ghaziabad", "Ludhiana", "Agra", "Nashik", "Faridabad", "Meerut", "Rajkot", "Varanasi", "Srinagar", "Aurangabad", "Dhanbad", "Amritsar", "Navi Mumbai", "Allahabad", "Ranchi", "Guwahati", "Chandigarh", "Mysore", "Dehradun", "Jammu"];
+export const AuthContext = createContext(null);
 
-const THEMES = {
-  dark: { bg: "#0f172a", text: "#f8fafc", cardBg: "rgba(30, 41, 59, 0.85)", accent: "#38bdf8", border: "1px solid rgba(255,255,255,0.1)", mapUrl: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", inputBg: "rgba(255,255,255,0.1)", dropdownBg: "#1e293b" },
-  light: { bg: "#f1f5f9", text: "#1e293b", cardBg: "rgba(255, 255, 255, 0.9)", accent: "#2563eb", border: "1px solid rgba(0,0,0,0.05)", mapUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", inputBg: "white", dropdownBg: "white" }
-};
-
-function MapUpdater({ center }) {
-  const map = useMap();
-  useEffect(() => { if (center) map.flyTo(center, 9, { duration: 1.5 }); }, [center, map]);
-  return null;
+export function useAuth() {
+  return useContext(AuthContext);
 }
 
-function MapClickController({ onLocationSelect }) {
-  useMapEvents({
-    click(e) {
-      const { lat, lng } = e.latlng;
-      onLocationSelect(`${lat},${lng}`);
-    },
-  });
-  return null;
+export const API_BASE = "http://127.0.0.1:8000";
+
+export function authFetch(url, options = {}) {
+  const token = localStorage.getItem("sentinel_token");
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  return fetch(`${API_BASE}${url}`, { ...options, headers });
 }
 
-function App() {
-  const [darkMode, setDarkMode] = useState(true);
-  const theme = darkMode ? THEMES.dark : THEMES.light;
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  useEffect(() => { window.addEventListener('resize', () => setIsMobile(window.innerWidth < 768)); }, []);
+function AuthProvider({ children }) {
+  const [user, setUser]       = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const [inputValue, setInputValue] = useState("New Delhi");
-  const [suggestions, setSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  
-  const [data, setData] = useState(null);
-  const [history, setHistory] = useState([]);
-  const [fireResult, setFireResult] = useState(null);
-  const [loadingFire, setLoadingFire] = useState(false);
-  const [showDetail, setShowDetail] = useState(false);
-  const [activeLayer, setActiveLayer] = useState(null); 
-  const suggestionBoxRef = useRef(null);
+  useEffect(() => {
+    const token = localStorage.getItem("sentinel_token");
+    const name  = localStorage.getItem("sentinel_name");
+    const role  = localStorage.getItem("sentinel_role");
+    if (token && name && role) setUser({ token, name, role });
+    setLoading(false);
+  }, []);
 
-  useEffect(() => { handleSearch("New Delhi"); fetchHistory(); }, []);
+  const login = useCallback((token, name, role) => {
+    localStorage.setItem("sentinel_token", token);
+    localStorage.setItem("sentinel_name",  name);
+    localStorage.setItem("sentinel_role",  role);
+    setUser({ token, name, role });
+  }, []);
 
-  const fetchHistory = async () => { try { const res = await fetch("http://127.0.0.1:8000/history"); setHistory(await res.json()); } catch(e) {} };
-
-  const handleSearch = async (query) => {
-    if (!query) return;
-    try {
-      const res = await fetch(`http://127.0.0.1:8000/weather/${query}`);
-      if (!res.ok) throw new Error("Location not found");
-      const result = await res.json();
-      setData(result);
-      setInputValue(result.weather.location.name);
-    } catch (err) { alert(err.message); }
-  };
-
-  const handleFireUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setLoadingFire(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const res = await fetch("http://127.0.0.1:8000/predict-fire", { method: "POST", body: formData });
-      const result = await res.json();
-      setFireResult(result);
-      if (result.result.includes("FIRE")) fetchHistory(); 
-    } catch (err) { console.error(err); }
-    setLoadingFire(false);
-  };
-
-  const downloadReport = async () => {
-    if (!data) return;
-    try {
-        const res = await fetch("http://127.0.0.1:8000/download-report", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data)
-        });
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `Sentinel_Report_${data.weather.location.name}.pdf`;
-        a.click();
-    } catch(e) { alert("Error generating report"); }
-  };
-
-  const handleInputChange = (e) => {
-    const val = e.target.value;
-    setInputValue(val);
-    if (val.length > 0) {
-      setSuggestions(CITIES_DB.filter(c => c.toLowerCase().startsWith(val.toLowerCase())));
-      setShowSuggestions(true);
-    } else setShowSuggestions(false);
-  };
-
-  const WeatherDetailView = () => {
-    if (!data) return null;
-    const current = data.weather.current;
-    const location = data.weather.location;
-    const forecast = data.weather.forecast.forecastday[0].hour; 
-    
-    const aqi = data.aqi_calculated || 0; 
-    const aqiSource = data.aqi_source || "Unknown Station";
-    const lastUpdated = current.last_updated || "Unknown";
-
-    let aqiColor = "#00e400";
-    let aqiLabel = "Good";
-    if (aqi <= 50) { aqiColor = "#00e400"; aqiLabel = "Good"; }
-    else if (aqi <= 100) { aqiColor = "#ffff00"; aqiLabel = "Moderate"; }
-    else if (aqi <= 150) { aqiColor = "#ff7e00"; aqiLabel = "Sensitive"; }
-    else if (aqi <= 200) { aqiColor = "#ff0000"; aqiLabel = "Unhealthy"; }
-    else if (aqi <= 300) { aqiColor = "#8f3f97"; aqiLabel = "Very Unhealthy"; }
-    else { aqiColor = "#7e0023"; aqiLabel = "Hazardous"; }
-
-    const weatherIcon = `https:${current.condition.icon}`;
-
-    return (
-      <div style={{
-        position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh",
-        background: "rgba(0, 0, 0, 0.7)", backdropFilter: "blur(8px)", zIndex: 99999,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        animation: "fadeIn 0.3s ease"
-      }} onClick={() => setShowDetail(false)}>
-        <div style={{
-          width: "90%", maxWidth: "850px", 
-          background: darkMode ? "linear-gradient(145deg, #1e293b, #0f172a)" : "linear-gradient(145deg, #ffffff, #f1f5f9)",
-          borderRadius: "24px", padding: "40px", border: "1px solid rgba(255,255,255,0.1)",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.5)", position: "relative"
-        }} onClick={e => e.stopPropagation()}>
-            <button onClick={() => setShowDetail(false)} style={{
-                position: "absolute", top: "20px", right: "20px", background: "rgba(128,128,128,0.2)",
-                border: "none", borderRadius: "50%", width: "40px", height: "40px", cursor: "pointer", 
-                color: theme.text, fontSize: "1.2rem", display: "flex", alignItems: "center", justifyContent: "center"
-            }}>✕</button>
-            <div style={{ display: "flex", alignItems: "center", gap: "20px", marginBottom: "40px", flexWrap: "wrap" }}>
-                <div style={{ width: "100px", height: "100px", borderRadius: "50%", background: `linear-gradient(135deg, ${theme.accent}40, ${theme.accent}10)`, display: "flex", alignItems: "center", justifyContent: "center", border: theme.border }}>
-                    <img src={weatherIcon} alt="weather" style={{ width: "80px" }} />
-                </div>
-                <div>
-                    <h1 style={{ margin: 0, fontSize: "3rem", lineHeight: "1" }}>{location.name}</h1>
-                    <p style={{ margin: "5px 0 0", fontSize: "1.2rem", opacity: 0.6 }}>{current.condition.text}</p>
-                    <p style={{ margin: "5px 0 0", fontSize: "0.85rem", opacity: 0.5, fontStyle: "italic" }}>Last Updated: {lastUpdated}</p>
-                </div>
-                <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                    <h1 style={{ margin: 0, fontSize: "4rem", fontWeight: "200" }}>{Math.round(current.temp_c)}°</h1>
-                </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: "20px", marginBottom: "40px" }}>
-                
-                {/* UPDATED AQI CARD WITH SOURCE */}
-                <div style={{ background: theme.cardBg, padding: "20px", borderRadius: "16px", border: theme.border, position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "4px", background: aqiColor }}></div>
-                    <small style={{ opacity: 0.6, letterSpacing: "1px" }}>AIR QUALITY</small>
-                    <h2 style={{ margin: "10px 0", color: aqiColor }}>{aqiLabel}</h2>
-                    <p style={{ margin: 0, fontSize: "1.2rem", fontWeight: "bold" }}>AQI: {aqi > 0 ? aqi : "N/A"}</p>
-                    <p style={{ margin: "5px 0 0", fontSize: "0.8rem", opacity: 0.5, fontStyle: "italic" }}>Source: {aqiSource}</p>
-                </div>
-
-                <div style={{ background: theme.cardBg, padding: "20px", borderRadius: "16px", border: theme.border }}>
-                    <small style={{ opacity: 0.6, letterSpacing: "1px" }}>HUMIDITY</small>
-                    <h2 style={{ margin: "10px 0" }}>{current.humidity}%</h2>
-                </div>
-                <div style={{ background: theme.cardBg, padding: "20px", borderRadius: "16px", border: theme.border }}>
-                    <small style={{ opacity: 0.6, letterSpacing: "1px" }}>VISIBILITY</small>
-                    <h2 style={{ margin: "10px 0" }}>{current.vis_km} km</h2>
-                </div>
-            </div>
-            <div>
-                <small style={{ opacity: 0.6, letterSpacing: "1px", display: "block", marginBottom: "15px" }}>HOURLY FORECAST</small>
-                <div style={{ display: "flex", gap: "15px", overflowX: "auto", paddingBottom: "10px" }}>
-                    {forecast.slice(0, 8).map((item, idx) => ( 
-                        <div key={idx} style={{ minWidth: "90px", padding: "15px", borderRadius: "16px", background: theme.cardBg, border: theme.border, display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
-                            <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>{new Date(item.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                            <img src={`https:${item.condition.icon}`} alt="icon" style={{ width: "35px" }} />
-                            <span style={{ fontWeight: "bold", fontSize: "1.1rem" }}>{Math.round(item.temp_c)}°</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-      </div>
-    );
-  };
+  const logout = useCallback(() => {
+    localStorage.removeItem("sentinel_token");
+    localStorage.removeItem("sentinel_name");
+    localStorage.removeItem("sentinel_role");
+    setUser(null);
+  }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: isMobile ? "column-reverse" : "row", height: "100vh", background: theme.bg, color: theme.text, fontFamily: "'Inter', sans-serif", transition: "all 0.3s ease" }}>
-      
-      {showDetail && <WeatherDetailView />}
+    <AuthContext.Provider value={{ user, login, logout, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
 
-      <div style={{ position: "relative", width: isMobile ? "100%" : "420px", height: isMobile ? "60%" : "100%", padding: "25px", display: "flex", flexDirection: "column", gap: "20px", background: darkMode ? "rgba(15, 23, 42, 0.95)" : "rgba(255,255,255,0.95)", backdropFilter: "blur(10px)", borderRight: theme.border, zIndex: 1000, overflowY: "auto" }}>
-        
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h1 style={{ margin: 0, fontSize: "1.5rem", background: "linear-gradient(to right, #38bdf8, #818cf8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>SENTINEL <span style={{fontSize:"0.8rem", color:theme.text, WebkitTextFillColor:theme.text}}>INDIA</span></h1>
-          <button onClick={() => setDarkMode(!darkMode)} style={{ background: "transparent", border: theme.border, color: theme.text, padding: "5px 10px", borderRadius: "15px", cursor: "pointer" }}>{darkMode ? "☀️" : "🌙"}</button>
-        </div>
+// ─────────────────────────────────────────────
+// ROUTE GUARDS
+// ─────────────────────────────────────────────
 
-        <div style={{ position: "relative" }} ref={suggestionBoxRef}>
-          <input type="text" placeholder="Monitor Sector..." value={inputValue} onChange={handleInputChange} onKeyDown={(e) => e.key==='Enter' && handleSearch(inputValue)} style={{ width: "100%", padding: "15px", borderRadius: "12px", border: "none", background: theme.inputBg, color: theme.text, outline: "none", boxShadow: "0 4px 15px rgba(0,0,0,0.05)" }} />
-          {showSuggestions && suggestions.length > 0 && (
-            <ul style={{ position: "absolute", top: "100%", left: 0, right: 0, background: theme.dropdownBg, borderRadius: "12px", padding: "5px 0", listStyle: "none", zIndex: 10, border: theme.border }}>
-              {suggestions.map((s, i) => <li key={i} onClick={() => { setInputValue(s); setShowSuggestions(false); handleSearch(s); }} style={{ padding: "10px 20px", cursor: "pointer", borderBottom: "1px solid rgba(128,128,128,0.1)" }}>{s}</li>)}
-            </ul>
-          )}
-        </div>
+function PrivateRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageLoader />;
+  if (!user)   return <Navigate to="/login" replace />;
+  return children;
+}
 
-        {data && (
-          <>
-            <div onClick={() => setShowDetail(true)} style={{ background: theme.cardBg, borderRadius: "16px", padding: "20px", border: theme.border, cursor: "pointer", transition: "transform 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.02)"} onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                 <h3 style={{ margin: 0, opacity: 0.8 }}>METEOROLOGY</h3>
-                 <small style={{ color: theme.accent, fontWeight: "bold" }}>VIEW HUD ↗</small>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", marginTop: "15px", gap: "15px" }}>
-                <h1 style={{ margin: 0, fontSize: "3.5rem", fontWeight: "300" }}>{Math.round(data.weather.current.temp_c)}°</h1>
-                <div><p style={{ margin: 0, fontSize: "1.2rem" }}>{data.weather.current.condition.text}</p><p style={{ margin: 0, opacity: 0.6 }}>{data.weather.location.name}</p></div>
-              </div>
-            </div>
+function GuestRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullPageLoader />;
+  if (user)    return <Navigate to="/dashboard" replace />;
+  return children;
+}
 
-            <div style={{ background: theme.cardBg, borderRadius: "16px", padding: "20px", border: theme.border, borderLeft: data.seismic_risk ? "4px solid #f43f5e" : "4px solid #10b981" }}>
-              <h3 style={{ margin: "0 0 10px 0", opacity: 0.8 }}>SEISMIC PROXIMITY</h3>
-              {data.seismic_risk ? (
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px" }}>
-                    <span style={{ color: "#f43f5e", fontWeight: "bold" }}>⚠️ ALERT LEVEL: HIGH</span>
-                    <span style={{ opacity: 0.6 }}>{new Date(data.seismic_risk.time).toLocaleDateString()}</span>
-                  </div>
-                  <p style={{ margin: "5px 0" }}>Activity near <b>{data.seismic_risk.location}</b></p>
-                </div>
-              ) : (
-                <div style={{ color: "#10b981", display: "flex", alignItems: "center", gap: "10px" }}>
-                  <span>🛡️</span><span>Sector Safe. No activity in 1500km.</span>
-                </div>
-              )}
-            </div>
-
-            <div style={{ background: theme.cardBg, borderRadius: "16px", padding: "20px", border: theme.border }}>
-              <h3 style={{ margin: "0 0 15px 0", opacity: 0.8 }}>AERIAL FIRE ANALYSIS</h3>
-              <label style={{ display: "block", padding: "20px", border: "2px dashed " + theme.accent, borderRadius: "12px", textAlign: "center", cursor: "pointer", background: "rgba(56, 189, 248, 0.05)" }}>
-                <input type="file" onChange={handleFireUpload} accept="image/*" style={{ display: "none" }} />
-                <span style={{ fontSize: "2rem" }}>🚁</span> Upload Feed
-              </label>
-              {fireResult && (
-                <div style={{ marginTop: "15px", padding: "15px", borderRadius: "12px", background: fireResult.result.includes("FIRE") ? "#ef4444" : "#10b981", color: "white" }}>
-                  <h2 style={{ margin: 0, fontSize: "1.2rem" }}>{fireResult.result}</h2>
-                  {fireResult.alert_channels && (
-                    <small>📨 via: {fireResult.alert_channels.join(", ")}</small>
-                  )}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* MAP CONTAINER WITH FIXED DOCK OUTSIDE */}
-      <div style={{ flex: 1, position: "relative" }}>
-        <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: "100%", width: "100%", background: theme.bg }}>
-          
-          <TileLayer url={theme.mapUrl} />
-          {activeLayer === 'clouds' && <TileLayer url={`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />}
-          {activeLayer === 'rain' && <TileLayer url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />}
-          {activeLayer === 'temp' && <TileLayer url={`https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />}
-          {activeLayer === 'wind' && <TileLayer url={`https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${OWM_KEY}`} />}
-
-          <MapClickController onLocationSelect={handleSearch} />
-
-          {data && (
-            <>
-              {data.seismic_risk && (
-                 <>
-                    <Circle center={data.seismic_risk.coords} radius={50000} pathOptions={{ color: 'red', fillColor: '#f43f5e', fillOpacity: 0.4 }} />
-                    <Marker position={data.seismic_risk.coords} icon={RedIcon}>
-                        <Popup><b>⚠️ DANGER ZONE</b><br/>{data.seismic_risk.location}</Popup>
-                    </Marker>
-                 </>
-              )}
-              <Marker position={[data.weather.location.lat, data.weather.location.lon]} icon={BlueIcon}>
-                <Popup><div style={{ textAlign: "center" }}><b>{data.weather.location.name}</b><br/>Current Sector</div></Popup>
-              </Marker>
-              <MapUpdater center={[data.weather.location.lat, data.weather.location.lon]} />
-            </>
-          )}
-        </MapContainer>
-
-        {/* FLOATING DOCK - NOW OUTSIDE MapContainer AS SIBLING */}
-        <div 
-          style={{
-            position: "absolute", bottom: "40px", left: "50%", transform: "translateX(-50%)",
-            background: theme.cardBg, backdropFilter: "blur(10px)",
-            padding: "10px 20px", borderRadius: "50px", border: theme.border,
-            display: "flex", gap: "15px", zIndex: 1000, boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
-            pointerEvents: "auto"
-          }}
-        >
-          {[
-            { id: 'clouds', icon: '☁️', label: 'Clouds' },
-            { id: 'rain', icon: '🌧️', label: 'Rain' },
-            { id: 'temp', icon: '🌡️', label: 'Temp' },
-            { id: 'wind', icon: '💨', label: 'Wind' }
-          ].map(layer => (
-            <button 
-              key={layer.id}
-              onClick={() => setActiveLayer(activeLayer === layer.id ? null : layer.id)}
-              style={{
-                background: activeLayer === layer.id ? theme.accent : "transparent",
-                color: activeLayer === layer.id ? "white" : theme.text,
-                border: "none", borderRadius: "30px", padding: "8px 15px",
-                cursor: "pointer", fontWeight: "bold", transition: "all 0.2s",
-                display: "flex", alignItems: "center", gap: "5px"
-              }}
-            >
-              <span>{layer.icon}</span>
-              {!isMobile && <span>{layer.label}</span>}
-            </button>
-          ))}
-        </div>
+function FullPageLoader() {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "#0B1320",
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div style={{ textAlign: "center" }}>
+        <div className="s-spinner" />
+        <p style={{
+          color: "#457B9D",
+          fontFamily: "'Space Mono', monospace",
+          marginTop: 18, letterSpacing: 3, fontSize: 11,
+          textTransform: "uppercase",
+        }}>
+          Sentinel — Initialising
+        </p>
       </div>
     </div>
   );
 }
 
-export default App;
+// ─────────────────────────────────────────────
+// ROOT APP
+// Analytics is a PUBLIC route — no auth required
+// ─────────────────────────────────────────────
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <GlobalStyles />
+        <Routes>
+          {/* Public */}
+          <Route path="/"                element={<Landing />} />
+
+          {/* Guest-only (redirect if already logged in) */}
+          <Route path="/login"           element={<GuestRoute><LoginPage /></GuestRoute>} />
+          <Route path="/register"        element={<GuestRoute><RegisterPage /></GuestRoute>} />
+
+          {/* Password reset — always accessible (token is the guard) */}
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password"  element={<ResetPasswordPage />} />
+
+          {/* Analytics — PUBLIC: unauthenticated users see the transparency report */}
+          <Route path="/analytics"       element={<Analytics />} />
+
+          {/* Protected */}
+          <Route path="/dashboard"       element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+
+          {/* Catch-all */}
+          <Route path="*"                element={<Navigate to="/" replace />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// GLOBAL STYLES
+//
+// THEME: "Enterprise Disaster Command"
+// Inspired by Palantir Gotham, FEMA operational dashboards, and high-stakes
+// military C2 software. No neon. No glitchy effects. Every visual choice
+// communicates authority, clarity, and trust.
+//
+// Palette:
+//   Background void:   #0B1320  (deep navy-slate)
+//   Background raised: #111C2D  (slightly lighter panel layer)
+//   Background card:   #162237  (content card surface)
+//   Primary accent:    #457B9D  (Operational Teal — links, active states)
+//   Alert/danger:      #E63946  (Emergency Crimson — fire, critical)
+//   Warning:           #F4A261  (Amber — moderate threats, pending)
+//   Safe/success:      #2A9D8F  (Safe Green — verified, clear status)
+//   Text primary:      #F0F4F8  (near-white, cool)
+//   Text secondary:    #8AABB8  (muted steel blue)
+//   Text dim:          #4A6A7A  (very muted)
+//   Border subtle:     rgba(69,123,157,0.15)
+//   Border active:     rgba(69,123,157,0.40)
+// ─────────────────────────────────────────────────────────────────────────
+function GlobalStyles() {
+  useEffect(() => {
+    const existing = document.getElementById("sentinel-global-styles");
+    if (existing) existing.remove();
+
+    const style = document.createElement("style");
+    style.id = "sentinel-global-styles";
+    style.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      /* ══════════════════════════════════════════
+         DESIGN TOKENS
+         ══════════════════════════════════════════ */
+      :root {
+        /* Backgrounds */
+        --bg-void:    #0B1320;
+        --bg-deep:    #111C2D;
+        --bg-card:    #162237;
+        --bg-raised:  #1A2840;
+
+        /* Borders */
+        --border:     rgba(69, 123, 157, 0.15);
+        --border-hot: rgba(69, 123, 157, 0.40);
+        --border-dim: rgba(69, 123, 157, 0.08);
+
+        /* Accents */
+        --teal:       #457B9D;
+        --teal-dim:   rgba(69, 123, 157, 0.15);
+        --teal-glow:  rgba(69, 123, 157, 0.08);
+
+        --crimson:    #E63946;
+        --crimson-dim:rgba(230, 57, 70, 0.15);
+
+        --amber:      #F4A261;
+        --amber-dim:  rgba(244, 162, 97, 0.15);
+
+        --green:      #2A9D8F;
+        --green-dim:  rgba(42, 157, 143, 0.15);
+
+        /* Aliases for legacy component refs */
+        --accent:     var(--teal);
+        --accent-dim: var(--teal-dim);
+        --alert:      var(--crimson);
+        --alert-dim:  var(--crimson-dim);
+        --warn:       var(--amber);
+        --warn-dim:   var(--amber-dim);
+
+        /* Text */
+        --text-primary: #F0F4F8;
+        --text-muted:   #8AABB8;
+        --text-dim:     #4A6A7A;
+
+        /* Typography */
+        --font-display: 'DM Sans', 'Inter', sans-serif;
+        --font-body:    'DM Sans', 'Inter', sans-serif;
+        --font-mono:    'Space Mono', 'Courier New', monospace;
+
+        /* Radius */
+        --radius-sm:  4px;
+        --radius-md:  8px;
+        --radius-lg:  12px;
+        --radius-xl:  16px;
+      }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+        background: var(--bg-void);
+        color: var(--text-primary);
+        font-family: var(--font-body);
+        font-size: 14px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      /* Scrollbar — thin, enterprise */
+      ::-webkit-scrollbar { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: var(--bg-deep); }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(69,123,157,0.30);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(69,123,157,0.55);
+      }
+
+      /* ══════════════════════════════════════════
+         LOADING SPINNER
+         ══════════════════════════════════════════ */
+      .s-spinner {
+        width: 36px; height: 36px;
+        border: 2px solid var(--border);
+        border-top-color: var(--teal);
+        border-radius: 50%;
+        animation: s-spin 0.75s linear infinite;
+        margin: 0 auto;
+      }
+      /* Legacy alias */
+      .sentinel-spinner {
+        width: 36px; height: 36px;
+        border: 2px solid var(--border);
+        border-top-color: var(--teal);
+        border-radius: 50%;
+        animation: s-spin 0.75s linear infinite;
+        margin: 0 auto;
+      }
+      @keyframes s-spin { to { transform: rotate(360deg); } }
+
+      /* ══════════════════════════════════════════
+         BUTTONS
+         ══════════════════════════════════════════ */
+      .s-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        font-family: var(--font-body);
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 0.3px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        border-radius: var(--radius-md);
+        padding: 9px 20px;
+        transition: all 0.18s ease;
+        white-space: nowrap;
+        text-transform: none;
+      }
+      .s-btn:disabled { opacity: 0.38; cursor: not-allowed; pointer-events: none; }
+
+      /* Primary — filled teal */
+      .s-btn-primary {
+        background: var(--teal);
+        color: #ffffff;
+        border-color: var(--teal);
+      }
+      .s-btn-primary:hover:not(:disabled) {
+        background: #5290B5;
+        border-color: #5290B5;
+        box-shadow: 0 0 0 3px rgba(69,123,157,0.18);
+      }
+
+      /* Ghost — outlined */
+      .s-btn-ghost {
+        background: transparent;
+        color: var(--teal);
+        border-color: var(--border-hot);
+      }
+      .s-btn-ghost:hover:not(:disabled) {
+        background: var(--teal-dim);
+        border-color: var(--teal);
+      }
+
+      /* Danger — crimson */
+      .s-btn-danger {
+        background: var(--crimson-dim);
+        color: var(--crimson);
+        border-color: rgba(230,57,70,0.30);
+      }
+      .s-btn-danger:hover:not(:disabled) {
+        background: rgba(230,57,70,0.22);
+        border-color: var(--crimson);
+      }
+
+      /* Success — green */
+      .s-btn-success {
+        background: var(--green-dim);
+        color: var(--green);
+        border-color: rgba(42,157,143,0.30);
+      }
+      .s-btn-success:hover:not(:disabled) {
+        background: rgba(42,157,143,0.22);
+        border-color: var(--green);
+      }
+
+      /* ══════════════════════════════════════════
+         FORM INPUTS
+         ══════════════════════════════════════════ */
+      .s-input {
+        display: block;
+        width: 100%;
+        padding: 10px 13px;
+        background: var(--bg-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        color: var(--text-primary);
+        font-family: var(--font-body);
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.18s, box-shadow 0.18s;
+        appearance: none;
+      }
+      .s-input:focus {
+        border-color: var(--teal);
+        box-shadow: 0 0 0 3px rgba(69,123,157,0.12);
+      }
+      .s-input::placeholder { color: var(--text-dim); }
+      .s-input option { background: var(--bg-card); color: var(--text-primary); }
+
+      .s-label {
+        display: block;
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 5px;
+      }
+
+      /* ══════════════════════════════════════════
+         CARDS
+         ══════════════════════════════════════════ */
+      .s-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 20px;
+      }
+
+      /* ══════════════════════════════════════════
+         BACKGROUNDS & DECORATIVE
+         ══════════════════════════════════════════ */
+
+      /* Subtle grid — used on auth left panel, landing sections */
+      .grid-bg {
+        background-image:
+          linear-gradient(rgba(69,123,157,0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(69,123,157,0.04) 1px, transparent 1px);
+        background-size: 48px 48px;
+      }
+
+      /* Horizontal scan line — used in auth branding column */
+      .scan-line {
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent 0%, var(--teal) 50%, transparent 100%);
+        animation: scan-move 4s ease-in-out infinite;
+        opacity: 0.35;
+        pointer-events: none;
+      }
+      @keyframes scan-move {
+        0%   { top: 0%;   opacity: 0; }
+        8%   { opacity: 0.35; }
+        92%  { opacity: 0.35; }
+        100% { top: 100%; opacity: 0; }
+      }
+
+      /* ══════════════════════════════════════════
+         ANIMATIONS
+         ══════════════════════════════════════════ */
+
+      /* Fade up — page entrances, card reveals */
+      .fade-up {
+        opacity: 0;
+        transform: translateY(20px);
+        animation: fade-up-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      }
+      .fade-up-delay-1 { animation-delay: 0.08s; }
+      .fade-up-delay-2 { animation-delay: 0.16s; }
+      .fade-up-delay-3 { animation-delay: 0.24s; }
+      .fade-up-delay-4 { animation-delay: 0.32s; }
+      @keyframes fade-up-in {
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Subtle pulse — status indicators, live badges */
+      @keyframes status-pulse {
+        0%, 100% { opacity: 1;   transform: scale(1); }
+        50%       { opacity: 0.6; transform: scale(0.85); }
+      }
+
+      /* Gentle float — hero illustration elements */
+      @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50%       { transform: translateY(-8px); }
+      }
+
+      /* ══════════════════════════════════════════
+         PULSING LEAFLET MAP MARKERS
+         Used by L.divIcon instances in Dashboard.jsx.
+         These must NOT reference neon colors — using
+         the enterprise palette instead.
+         ══════════════════════════════════════════ */
+      .pulse-marker {
+        position: relative;
+        width: 16px; height: 16px;
+      }
+      .pulse-marker::before {
+        content: '';
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        z-index: 2;
+      }
+      .pulse-marker::after {
+        content: '';
+        position: absolute;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%) scale(1);
+        width: 16px; height: 16px;
+        border-radius: 50%;
+        opacity: 0.7;
+        animation: marker-pulse 2.2s ease-out infinite;
+        z-index: 1;
+      }
+      @keyframes marker-pulse {
+        0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.7; }
+        100% { transform: translate(-50%,-50%) scale(3.8); opacity: 0;   }
+      }
+
+      /* Crimson — fire / critical incidents */
+      .pulse-red::before { background: #E63946; box-shadow: 0 0 7px #E63946; }
+      .pulse-red::after  { background: #E63946; }
+
+      /* Amber — moderate incidents */
+      .pulse-orange::before { background: #F4A261; box-shadow: 0 0 7px #F4A261; }
+      .pulse-orange::after  { background: #F4A261; }
+
+      /* Teal — monitored city */
+      .pulse-blue::before { background: #457B9D; box-shadow: 0 0 7px #457B9D; }
+      .pulse-blue::after  { background: #457B9D; }
+
+      /* Green — safe zones & shelters */
+      .pulse-green::before { background: #2A9D8F; box-shadow: 0 0 7px #2A9D8F; }
+      .pulse-green::after  { background: #2A9D8F; animation-duration: 3.2s; }
+
+      /* ══════════════════════════════════════════
+         LEAFLET POPUP OVERRIDES
+         ══════════════════════════════════════════ */
+      .leaflet-container { font-family: var(--font-body) !important; }
+      .leaflet-popup-content-wrapper {
+        background: var(--bg-card) !important;
+        border: 1px solid var(--border-hot) !important;
+        border-radius: var(--radius-lg) !important;
+        color: var(--text-primary) !important;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.55) !important;
+      }
+      .leaflet-popup-tip { background: var(--bg-card) !important; }
+      .leaflet-popup-content {
+        margin: 12px 16px !important;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text-primary);
+      }
+
+      /* ══════════════════════════════════════════
+         TYPOGRAPHY HELPERS
+         ══════════════════════════════════════════ */
+      .mono { font-family: var(--font-mono) !important; }
+      .text-crimson { color: var(--crimson) !important; }
+      .text-amber   { color: var(--amber)   !important; }
+      .text-teal    { color: var(--teal)    !important; }
+      .text-green   { color: var(--green)   !important; }
+      .text-muted   { color: var(--text-muted) !important; }
+      .text-dim     { color: var(--text-dim)   !important; }
+
+      /* ══════════════════════════════════════════
+         STATUS BADGE
+         ══════════════════════════════════════════ */
+      .status-dot {
+        display: inline-block;
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .status-dot.live  { background: var(--green);   box-shadow: 0 0 6px var(--green);   animation: status-pulse 2.4s ease infinite; }
+      .status-dot.alert { background: var(--crimson); box-shadow: 0 0 6px var(--crimson);  animation: status-pulse 1.2s ease infinite; }
+      .status-dot.warn  { background: var(--amber);   box-shadow: 0 0 6px var(--amber);   animation: status-pulse 1.8s ease infinite; }
+      .status-dot.idle  { background: var(--text-dim); }
+
+      /* ══════════════════════════════════════════
+         DIVIDER
+         ══════════════════════════════════════════ */
+      .s-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 0;
+      }
+
+      /* ══════════════════════════════════════════
+         RECHARTS TOOLTIP — enterprise dark
+         ══════════════════════════════════════════ */
+      .sentinel-chart-tooltip {
+        background: var(--bg-card) !important;
+        border: 1px solid var(--border-hot) !important;
+        border-radius: var(--radius-md) !important;
+        padding: 10px 14px !important;
+        font-family: var(--font-mono) !important;
+        font-size: 11px !important;
+        color: var(--text-primary) !important;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4) !important;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      const el = document.getElementById("sentinel-global-styles");
+      if (el) el.remove();
+    };
+  }, []);
+  return null;
+}
