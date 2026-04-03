@@ -17,7 +17,7 @@ httpx
 # Database & Authentication
 supabase
 passlib[bcrypt]
-pyjwt
+python-jose[cryptography]
 
 # Communications (Alerts)
 twilio
