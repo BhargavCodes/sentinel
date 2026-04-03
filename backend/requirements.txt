@@ -27,3 +27,5 @@ sendgrid
 fpdf
 python-dotenv
 haversine
+
+email-validator
