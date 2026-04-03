@@ -9,16 +9,21 @@ numpy
 
 # Image Processing
 pillow
-opencv-python
+opencv-python-headless
 
-# HTTP Requests (Weather/AQI APIs)
+# HTTP Requests (Weather/USGS APIs)
 httpx
 
-# Reporting
-fpdf
+# Database & Authentication
+supabase
+passlib[bcrypt]
+pyjwt
 
-# Environment & Security
-python-dotenv
-
-# Alerts (SMS)
+# Communications (Alerts)
 twilio
+sendgrid
+
+# Utilities
+fpdf
+python-dotenv
+haversine
