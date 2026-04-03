@@ -9,7 +9,7 @@ import React, { useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "./App";
 
-const API_BASE = "http://127.0.0.1:8000";
+import { API_BASE } from './App';
 
 const CITIES = [
   "New Delhi","Mumbai","Bangalore","Hyderabad","Chennai","Kolkata","Pune",

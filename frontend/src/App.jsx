@@ -21,7 +21,7 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-export const API_BASE = "https://sentinel-api-lzbz.onrender.com";
+export const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 export function authFetch(url, options = {}) {
   const token = localStorage.getItem("sentinel_token");
