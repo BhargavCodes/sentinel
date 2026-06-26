@@ -35,11 +35,34 @@ Key changes vs. the previous version
    the legacy  .h5  for backward compatibility with any older load paths.
 """
 
+# train_model.py
+"""
+Sentinel Fire Detection — Transfer Learning with MobileNetV2
+v4.0 — preprocess_input alignment + clean val pipeline
+
+Key changes vs v3.0
+--------------------
+1. Uses tensorflow.keras.applications.mobilenet_v2.preprocess_input for BOTH
+   training and validation instead of rescale=1/255. MobileNetV2 was trained
+   with inputs scaled to [-1, 1] (preprocess_input does this internally), not
+   [0, 1]. Mismatched preprocessing between training and inference is one of
+   the most common causes of silent accuracy loss / false negatives in
+   transfer-learning pipelines, so this version makes it the single source
+   of truth — main.py and enhanced_fire_detection.py must use the exact same
+   function at inference time (see accompanying files).
+2. Validation/holdout data uses NO augmentation. Augmenting validation data
+   makes your val metrics noisy and unrepresentative of real-world inference
+   — validation must see only resize + preprocess_input, nothing else.
+3. Everything else (224x224 input, class weighting, two-phase fine-tuning,
+   .keras + .h5 export) is preserved from v3.0.
+"""
+
 import numpy as np
 import os
 
 import tensorflow as tf
 from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
 from tensorflow.keras.models import Model
@@ -53,31 +76,42 @@ from sklearn.utils.class_weight import compute_class_weight
 DATA_DIR        = "dataset"
 IMG_SIZE        = (224, 224)   # MobileNetV2 native optimal resolution
 BATCH_SIZE      = 32
-EPOCHS_HEAD     = 20           # frozen-backbone phase
-EPOCHS_FINETUNE = 10           # unfrozen fine-tune phase
+EPOCHS_HEAD     = 20            # frozen-backbone phase
+EPOCHS_FINETUNE = 10            # unfrozen fine-tune phase
 
-print("Fire Detection — MobileNetV2 Transfer Learning v3.0")
+print("Fire Detection — MobileNetV2 Transfer Learning v4.0")
 print(f"    Input resolution : {IMG_SIZE}")
 print(f"    Dataset directory: {DATA_DIR}")
+print(f"    Preprocessing    : tensorflow.keras.applications.mobilenet_v2.preprocess_input")
 
 # =============================================================================
-# DATA LOADING — AGGRESSIVE AUGMENTATION
+# DATA LOADING
 # =============================================================================
+# IMPORTANT: preprocess_input scales pixels to [-1, 1] and must be used as the
+# `preprocessing_function` (NOT rescale=1/255 — the two are mutually
+# exclusive ways of normalising pixels, and mixing them silently corrupts the
+# input distribution the backbone expects).
 
-# zoom_range and shear_range teach the model to recognise fire textures at
-# varied scales and angles, directly counteracting the "large uniform colour
-# blob == fire" shortcut that causes sunset false positives.
 train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
-    rescale           = 1.0 / 255,
-    rotation_range    = 20,
-    width_shift_range  = 0.2,
-    height_shift_range = 0.2,
-    horizontal_flip   = True,
-    brightness_range  = [0.75, 1.25],   # slightly wider than before
-    zoom_range        = 0.2,            # NEW: scale invariance
-    shear_range       = 0.15,           # NEW: perspective distortion
-    fill_mode         = "reflect",      # avoids black-border artefacts
-    validation_split  = 0.2,
+    preprocessing_function = preprocess_input,
+    rotation_range     = 20,
+    width_shift_range   = 0.2,
+    height_shift_range  = 0.2,
+    horizontal_flip    = True,
+    brightness_range   = [0.75, 1.25],
+    zoom_range         = 0.2,
+    shear_range        = 0.15,
+    fill_mode          = "reflect",
+    validation_split   = 0.2,
+)
+
+# A SEPARATE generator for validation — preprocess_input only, NO augmentation.
+# Using the same `train_datagen` object for both subsets (as in v3.0) is
+# convenient but means val images still get rotation/zoom/shear/shift applied,
+# which is incorrect: validation must reflect true inference conditions.
+val_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
+    preprocessing_function = preprocess_input,
+    validation_split        = 0.2,
 )
 
 print("\nLoading dataset...")
@@ -91,7 +125,7 @@ train_ds = train_datagen.flow_from_directory(
     seed        = 42,
 )
 
-val_ds = train_datagen.flow_from_directory(
+val_ds = val_datagen.flow_from_directory(
     DATA_DIR,
     target_size = IMG_SIZE,
     batch_size  = BATCH_SIZE,
@@ -105,18 +139,13 @@ print(f"\n    Training samples  : {train_ds.samples}")
 print(f"    Validation samples: {val_ds.samples}")
 print(f"    Class mapping     : {train_ds.class_indices}")
 # IMPORTANT: class_indices is typically {'fire': 0, 'nofire': 1} (alphabetical).
-# The main.py predict_fire endpoint interprets a LOW model output (sigmoid -> 0)
-# as fire and HIGH output as no-fire, via the check:  ml_score < ml_threshold.
-# If your folder names sort differently, verify this mapping with check_classes.py.
+# main.py's predict_fire endpoint interprets a LOW model output (sigmoid -> 0)
+# as fire and HIGH output as no-fire, via: ml_score < ml_threshold.
+# If your folder names sort differently, verify this with check_classes.py.
 
 # =============================================================================
 # CLASS WEIGHT CALCULATION
 # =============================================================================
-# Adding hard negatives (sunsets / autumn leaves) to the 'nofire' folder skews
-# the class distribution. compute_class_weight('balanced') sets:
-#   w_c = n_samples / (n_classes * n_samples_c)
-# so the minority class receives proportionally higher gradient updates,
-# preventing the model from simply learning to output the majority class.
 
 train_labels        = train_ds.classes
 class_weight_array  = compute_class_weight(
@@ -139,14 +168,13 @@ base_model = MobileNetV2(
     include_top = False,
     input_shape = (*IMG_SIZE, 3),
 )
-# Phase 1: freeze the entire backbone — only train the classification head.
 base_model.trainable = False
 
 x      = base_model.output
 x      = GlobalAveragePooling2D()(x)
-x      = Dense(256, activation="relu")(x)   # wider than before (was 128)
-x      = Dropout(0.4)(x)                    # slightly higher dropout
-x      = Dense(64,  activation="relu")(x)   # extra bottleneck layer
+x      = Dense(256, activation="relu")(x)
+x      = Dropout(0.4)(x)
+x      = Dense(64,  activation="relu")(x)
 x      = Dropout(0.2)(x)
 output = Dense(1, activation="sigmoid")(x)
 
@@ -207,10 +235,6 @@ history_phase1 = model.fit(
 # =============================================================================
 # PHASE 2 — FINE-TUNING (unfreeze top-40 backbone layers)
 # =============================================================================
-# Unlock the uppermost MobileNetV2 blocks (which learn high-level patterns
-# like texture, edges, and shapes) so they can specialise for fire/smoke.
-# The lower layers (colour/edge detectors) remain frozen to preserve generic
-# low-level features and prevent catastrophic forgetting.
 
 print("\nPhase 2 — Fine-tuning top-40 backbone layers...")
 
@@ -221,7 +245,6 @@ for layer in base_model.layers[:-40]:
 trainable_after = sum(1 for layer in model.layers if layer.trainable)
 print(f"    Trainable layers after unfreezing: {trainable_after}/{len(model.layers)}")
 
-# 10x lower learning rate avoids destroying pre-trained ImageNet weights
 model.compile(
     optimizer = Adam(learning_rate=1e-5),
     loss      = "binary_crossentropy",
@@ -270,8 +293,8 @@ history_phase2 = model.fit(
 # SAVE FINAL MODEL — both formats for compatibility
 # =============================================================================
 
-model.save("models/fire_model_enhanced.keras")   # recommended (TF >= 2.12)
-model.save("models/fire_model_enhanced.h5")      # legacy fallback for main.py
+model.save("models/fire_model_enhanced.keras")
+model.save("models/fire_model_enhanced.h5")
 
 print("\nTraining complete.")
 print("    Saved: models/fire_model_enhanced.keras")
@@ -288,5 +311,5 @@ for name, val in zip(metric_names, val_results):
     print(f"    {name:<12}: {val:.4f}")
 
 print("\n    Run 'python main.py' to start the Sentinel API server.")
-print("    NOTE: The model now expects 224x224 input.")
-print("    main.py has been updated to resize to (224, 224) in all prediction paths.")
+print("    NOTE: Inference MUST use mobilenet_v2.preprocess_input, not /255.0.")
+print("    See the MAIN.PY CHANGES section for the exact replacement.")

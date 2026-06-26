@@ -5,7 +5,7 @@
 # Features:
 #   - Supabase (PostgreSQL) via supabase-py
 #   - JWT Auth with Role-Based Access Control (admin / public)
-#   - Dynamic Targeted Alert Engine (Twilio SMS + SendGrid Email)
+#   - Dynamic Targeted Alert Engine (Twilio SMS + Resend Email)
 #   - Refined Seismic Logic (150km / Mag 4.5 threshold)
 #   - Live Drone Video Analysis (OpenCV frame extraction)
 #   - Crowdsourcing API (submit, verify, reject incidents)
@@ -13,7 +13,7 @@
 #   - Full AQI multi-strategy fallback (preserved from v1)
 #   - MobileNetV2 fire detection (preserved from v1)
 #   - PDF report generation (preserved from v1)
-#   - [v2.1 NEW] Secure Password Reset flow (JWT + SendGrid)
+#   - [v2.1 NEW] Secure Password Reset flow (JWT + Resend)
 # =============================================================================
 
 from __future__ import annotations
@@ -29,14 +29,13 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
-import tempfile
-import os
-
 import bcrypt
 import cv2
 import httpx
 import numpy as np
+import resend
 import tensorflow as tf
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 from dotenv import load_dotenv
 from fastapi import (
     Depends,
@@ -55,8 +54,6 @@ from fpdf import FPDF
 from jose import JWTError, jwt
 from PIL import Image
 from pydantic import BaseModel, EmailStr
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 from supabase import Client, create_client
 from twilio.rest import Client as TwilioClient
 
@@ -84,9 +81,9 @@ JWT_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 # cannot be replayed as regular access tokens.
 PASSWORD_RESET_EXPIRE_MINUTES: int = 15
 
-# --- SendGrid ---
-SENDGRID_API_KEY: str = os.getenv("SENDGRID_API_KEY", "")
-EMAIL_SENDER: str = os.getenv("EMAIL_SENDER", "")
+# --- Resend ---
+RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+resend.api_key = RESEND_API_KEY
 
 # --- Twilio ---
 TWILIO_SID: str = os.getenv("TWILIO_SID", "")
@@ -288,7 +285,7 @@ async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
 
 
 # =============================================================================
-# ALERT ENGINE — TARGETED DISPATCH (SendGrid + Twilio)
+# ALERT ENGINE — TARGETED DISPATCH (Resend + Twilio)
 # =============================================================================
 
 
@@ -300,7 +297,7 @@ def _build_alert_html(
     timestamp: str,
     message: str,
 ) -> str:
-    """Render the HTML body for the SendGrid alert email."""
+    """Render the HTML body for the Resend alert email."""
     color = "#ef4444" if incident_type.lower() == "fire" else "#f59e0b"
     emoji = "🔥" if incident_type.lower() == "fire" else "🌍"
     return f"""
@@ -341,7 +338,7 @@ def _build_alert_html(
 
 
 def _build_password_reset_html(reset_url: str, user_name: str) -> str:
-    """Render the HTML body for the SendGrid password-reset email."""
+    """Render the HTML body for the Resend password-reset email."""
     return f"""
     <html>
     <body style="font-family:'Segoe UI',Arial,sans-serif;background:#060B14;margin:0;padding:20px;">
@@ -434,7 +431,7 @@ async def dispatch_targeted_alerts(
     Core Alert Engine.
     1. Queries users whose target_city matches the incident location.
     2. Extracts emails and phone numbers.
-    3. Dispatches SendGrid emails and Twilio SMS in parallel.
+    3. Dispatches Resend emails and Twilio SMS in parallel.
     4. Logs every dispatch to the alert_log table.
 
     Returns a summary dict with counts.
@@ -475,21 +472,19 @@ async def dispatch_targeted_alerts(
     emails_sent = 0
     sms_sent = 0
 
-    # -- 2. SendGrid emails ----------------------------------------------------
-    if emails and SENDGRID_API_KEY:
-        sg = SendGridAPIClient(api_key=SENDGRID_API_KEY)
+    # -- 2. Resend emails ------------------------------------------------------
+    if emails and RESEND_API_KEY:
         subject = f"🚨 SENTINEL ALERT: {incident_type.upper()} in {location}"
 
         for recipient_email in emails:
             try:
-                mail = Mail(
-                    from_email=EMAIL_SENDER,
-                    to_emails=recipient_email,
-                    subject=subject,
-                    html_content=html_body,
-                )
-                response = sg.send(mail)
-                provider_id = response.headers.get("X-Message-Id", "unknown")
+                response = resend.Emails.send({
+                    "from": "Sentinel System <onboarding@resend.dev>",
+                    "to": [recipient_email],
+                    "subject": subject,
+                    "html": html_body,
+                })
+                provider_id = response.get("id", "unknown")
                 alert_rows.append(
                     {
                         "incident_id": incident_id,
@@ -512,8 +507,8 @@ async def dispatch_targeted_alerts(
                     }
                 )
     else:
-        if not SENDGRID_API_KEY:
-            print("⚠️  SENDGRID_API_KEY not set — email alerts skipped.")
+        if not RESEND_API_KEY:
+            print("⚠️  RESEND_API_KEY not set — email alerts skipped.")
 
     # -- 3. Twilio SMS ---------------------------------------------------------
     if phones and all([TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
@@ -675,36 +670,159 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def detect_smoke_pattern(image_pil: Image.Image) -> bool:
-    """Return True if the image contains grey/white smoke-like regions."""
-    img = np.array(image_pil.convert("RGB"))
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    img_hsv = np.array(image_pil.convert("HSV"))
+    S, V = img_hsv[:, :, 1], img_hsv[:, :, 2]
 
-    S = hsv[:, :, 1]
-    V = hsv[:, :, 2]
+    smoke_mask = (S < 45) & (V > 90) & (V < 225)
+    total_pixels = img_hsv.shape[0] * img_hsv.shape[1]
+    smoke_ratio = np.count_nonzero(smoke_mask) / total_pixels
 
-    # Smoke: low saturation, medium-high brightness
-    smoke_mask = (S < 40) & (V > 100) & (V < 220)
-    smoke_ratio = np.count_nonzero(smoke_mask) / smoke_mask.size
+    if smoke_ratio < 0.04:
+        return False
 
-    # Texture in smoke region is typically smooth
-    std_dev = cv2.Laplacian(gray.astype(np.float32), cv2.CV_32F)
-    std_dev = np.abs(std_dev)
-    if smoke_ratio > 0.05:
-        smoke_texture = float(np.mean(std_dev[smoke_mask]))
-        if smoke_texture < 15:
-            return True
+    upper_half_idx = img_hsv.shape[0] // 2
+    smoke_in_upper = np.count_nonzero(smoke_mask[:upper_half_idx, :])
+    total_smoke = np.count_nonzero(smoke_mask)
+    if total_smoke == 0:
+        return False
 
-    return smoke_ratio > 0.12
+    upper_ratio = smoke_in_upper / total_smoke
+    return upper_ratio > 0.35 or smoke_ratio > 0.18
 
 
 def is_night_scene(image_pil: Image.Image) -> bool:
-    """Return True if the overall brightness suggests a night scene."""
-    img = np.array(image_pil.convert("L"))
-    return float(np.mean(img)) < 60
+    img_hsv = np.array(image_pil.convert("HSV"))
+    V = img_hsv[:, :, 2]
+    avg_brightness = np.mean(V)
+    has_bright_spots = np.count_nonzero(V > 140) > (V.size * 0.01)
+    return avg_brightness < 95 and has_bright_spots
+
+
+def detect_city_lights(image_pil: Image.Image, fire_mask: np.ndarray) -> bool:
+    img_hsv = np.array(image_pil.convert("HSV"))
+    S, V = img_hsv[:, :, 1], img_hsv[:, :, 2]
+
+    bright_mask = (V > 180) & (S < 60)
+    bright_uint8 = bright_mask.astype(np.uint8) * 255
+    num_labels, _, stats, _ = cv2.connectedComponentsWithStats(bright_uint8, connectivity=8)
+
+    tiny_points = sum(1 for i in range(1, num_labels) if stats[i, cv2.CC_STAT_AREA] < 15)
+    fire_pixel_count = int(np.count_nonzero(fire_mask))
+    return tiny_points > 25 and fire_pixel_count < 200
 
 
 def analyze_fire_characteristics(image_pil: Image.Image) -> dict:
+    """
+    Multi-stage fire analysis pipeline.
+    Returns a dict with score, flags, and a confidence_level string.
+    """
+    img_rgb = np.array(image_pil.convert("RGB"))
+    hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+
+    H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    R = img_rgb[:, :, 0].astype(np.int16)
+    G = img_rgb[:, :, 1].astype(np.int16)
+    B = img_rgb[:, :, 2].astype(np.int16)
+
+    fire_color_mask = ((H < 25) | (H > 170)) & (S > 80) & (V > 110)
+    red_dominance = (R > G + 10) & (R > B + 10)
+    fire_mask = fire_color_mask & red_dominance
+
+    fire_pixel_count = int(np.count_nonzero(fire_mask))
+    fire_ratio = fire_pixel_count / fire_mask.size
+
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    std_dev = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+    avg_texture_variance = float(np.mean(std_dev[fire_mask])) if fire_pixel_count > 0 else 0.0
+    has_fire_texture = avg_texture_variance > 18.0
+
+    if fire_pixel_count > 0:
+        v_fire = V[fire_mask].astype(np.float32)
+        brightness_std = float(np.std(v_fire))
+    else:
+        brightness_std = 0.0
+    has_brightness_variation = brightness_std > 25.0
+
+    # --- Unbounded clustering: NO upper cap on cluster count. Real wildfires
+    # can show many disconnected flame regions (multiple fronts / spotting) —
+    # the old `1 <= clusters <= 8` cap rejected exactly those images.
+    num_clusters = 0
+    has_clustering = False
+    is_multi_front = False
+    if fire_pixel_count > 0:
+        fire_uint8 = fire_mask.astype(np.uint8) * 255
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(fire_uint8, connectivity=8)
+        cluster_areas = [stats[i, cv2.CC_STAT_AREA] for i in range(1, num_labels) if stats[i, cv2.CC_STAT_AREA] > 40]
+        num_clusters = len(cluster_areas)
+        has_clustering = num_clusters >= 1
+        is_multi_front = num_clusters >= 4
+
+    avg_saturation = float(np.mean(S))
+    high_saturation = avg_saturation > 80 or (avg_saturation > 60 and fire_ratio > 0.15)
+
+    has_smoke = detect_smoke_pattern(image_pil)
+    is_night = is_night_scene(image_pil)
+    is_city_lights = is_night and detect_city_lights(image_pil, fire_mask)
+
+    sunset_penalty = 0
+    is_sunset_pattern = False
+    if fire_pixel_count > 80:
+        height = img_rgb.shape[0]
+        sky_row_cut = max(1, int(height * 0.35))
+        fire_in_sky = int(np.count_nonzero(fire_mask[:sky_row_cut, :]))
+        top_fire_ratio = fire_in_sky / fire_pixel_count
+        fire_region_texture = float(np.mean(std_dev[fire_mask]))
+        if top_fire_ratio >= 0.55 and fire_region_texture < 22.0:
+            sunset_penalty = 2
+            is_sunset_pattern = True
+
+    raw_score = 0
+    if fire_ratio > 0.008:                              raw_score += 1
+    if has_fire_texture:                                raw_score += 2
+    if has_brightness_variation:                        raw_score += 1
+    if has_clustering:                                  raw_score += 3
+    if is_multi_front:                                  raw_score += 2
+    if high_saturation:                                 raw_score += 1
+    if has_smoke:                                       raw_score += 2
+    if is_night and fire_pixel_count > 30 and not is_city_lights: raw_score += 2
+    if is_city_lights:                                  raw_score -= 3
+
+    effective_score = max(0, raw_score - sunset_penalty)
+    max_score = 14
+
+    if effective_score >= 8:
+        is_likely_fire, confidence_level = True, "HIGH"
+    elif effective_score >= 5:
+        is_likely_fire, confidence_level = True, "MODERATE"
+    elif has_clustering and has_smoke and not is_sunset_pattern and not is_city_lights:
+        is_likely_fire, confidence_level = True, "OVERRIDE"
+        effective_score = max(effective_score, 5)
+    elif fire_ratio > 0.20 and has_clustering and not is_sunset_pattern and not is_city_lights:
+        is_likely_fire, confidence_level = True, "OVERRIDE"
+        effective_score = max(effective_score, 5)
+    elif is_multi_front and not is_sunset_pattern and not is_city_lights:
+        is_likely_fire, confidence_level = True, "OVERRIDE"
+        effective_score = max(effective_score, 5)
+    else:
+        is_likely_fire, confidence_level = False, "NOT FIRE"
+
+    return {
+        "fire_pixel_ratio":   fire_ratio,
+        "has_fire_texture":   has_fire_texture,
+        "texture_variance":   avg_texture_variance,
+        "has_smoke":          has_smoke,
+        "is_night":           is_night,
+        "is_city_lights":     is_city_lights,
+        "is_sunset_pattern":  is_sunset_pattern,
+        "sunset_penalty":     sunset_penalty,
+        "num_clusters":       num_clusters,
+        "is_multi_front":     is_multi_front,
+        "raw_score":          raw_score,
+        "total_score":        effective_score,
+        "max_score":          max_score,
+        "confidence_level":   confidence_level,
+        "is_likely_fire":     is_likely_fire,
+    }
     """
     Multi-stage fire analysis pipeline.
     Returns a dict with score, flags, and a confidence_level string.
@@ -839,7 +957,7 @@ def generate_pdf(
     loc = weather.get("location", {})
     current = weather.get("current", {})
     pdf.set_font("Arial", "B", 14)
-    
+
     # Safe encoding helper to strip any weird API characters
     def safe_str(text):
         return str(text).encode('latin-1', 'replace').decode('latin-1')
@@ -874,7 +992,7 @@ def generate_pdf(
 
     temp_dir = tempfile.gettempdir()
     filename = os.path.join(temp_dir, f"sentinel_report_{uuid.uuid4().hex[:8]}.pdf")
-    
+
     pdf.output(filename)
     return filename
 
@@ -899,6 +1017,37 @@ async def fetch_global_quakes() -> None:
             print(f"⚠️ USGS fetch failed: {exc}")
         await asyncio.sleep(60)
 
+# async def fetch_global_quakes() -> None:
+#     """Poll USGS every 60 s for magnitude 2.5+ earthquakes from the past day."""
+#     global recent_quakes
+#     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+#     while True:
+#         try:
+#             async with httpx.AsyncClient(timeout=15.0) as client:
+#                 resp = await client.get(url)
+#                 if resp.status_code == 200:
+#                     recent_quakes = resp.json().get("features", [])
+                    
+#                     # --- 🚨 MOCK INJECTION FOR TESTING 🚨 ---
+#                     # Injecting a fake Mag 6.5 earthquake near Pune
+#                     # Note: USGS GeoJSON expects coordinates as [Longitude, Latitude]
+#                     mock_quake = {
+#                         "properties": {
+#                             "mag": 6.5,
+#                             "place": "MOCK TEST: 12km SE of Pune",
+#                             "time": int(datetime.datetime.now().timestamp() * 1000)
+#                         },
+#                         "geometry": {
+#                             "coordinates": [73.8567, 18.5204, 10.0]
+#                         }
+#                     }
+#                     recent_quakes.append(mock_quake)
+#                     # ----------------------------------------
+                    
+#                     print(f"🌍 Seismic cache updated: {len(recent_quakes)} earthquakes (incl. 1 MOCK)")
+#         except Exception as exc:
+#             print(f"⚠️ USGS fetch failed: {exc}")
+#         await asyncio.sleep(60)
 
 # =============================================================================
 # APP LIFECYCLE
@@ -1075,7 +1224,7 @@ async def forgot_password(
     - Always returns HTTP 200 with the same message regardless of whether
       the email exists (prevents user enumeration).
     - If the email IS registered, generates a 15-minute password-reset JWT
-      and sends a SendGrid email containing the reset link.
+      and sends a Resend email containing the reset link.
 
     Reset link format:
         {FRONTEND_URL}/reset-password?token=<JWT>
@@ -1102,21 +1251,19 @@ async def forgot_password(
     reset_token = create_password_reset_token(user["id"])
     reset_url = f"{FRONTEND_URL}/reset-password?token={reset_token}"
 
-    if not SENDGRID_API_KEY:
+    if not RESEND_API_KEY:
         # In development, log the reset URL so engineers can test without email
-        print(f"⚠️  SendGrid not configured. Dev reset URL for {user['email']}:")
+        print(f"⚠️  RESEND_API_KEY not configured. Dev reset URL for {user['email']}:")
         print(f"   {reset_url}")
         return GENERIC_RESPONSE
 
     try:
-        sg = SendGridAPIClient(api_key=SENDGRID_API_KEY)
-        mail = Mail(
-            from_email=EMAIL_SENDER,
-            to_emails=user["email"],
-            subject="🔐 Sentinel — Password Reset Request",
-            html_content=_build_password_reset_html(reset_url, user["name"]),
-        )
-        sg.send(mail)
+        resend.Emails.send({
+            "from": "Sentinel System <onboarding@resend.dev>",
+            "to": [user["email"]],
+            "subject": "🔐 Sentinel — Password Reset Request",
+            "html": _build_password_reset_html(reset_url, user["name"]),
+        })
         print(f"✅ Password reset email sent to {user['email']}")
     except Exception as exc:
         # Log the error server-side but still return the generic response so
@@ -1284,7 +1431,9 @@ async def predict_fire(
             "sunset_penalty": analysis["sunset_penalty"],
         }
 
-    img_arr = np.expand_dims(np.array(image.resize((224, 224))), axis=0) / 255.0
+    img_resized = image.resize((224, 224))
+    img_arr = preprocess_input(np.array(img_resized).astype(np.float32))
+    img_arr = np.expand_dims(img_arr, axis=0)
     ml_score = float(model.predict(img_arr, verbose=0)[0][0])
     ml_conf  = 1.0 - ml_score
 
@@ -1398,9 +1547,9 @@ async def analyze_drone(
                 analysis = analyze_fire_characteristics(pil_img)
 
                 if analysis["is_likely_fire"]:
-                    img_arr = np.expand_dims(
-                        np.array(pil_img.resize((224, 224))), axis=0
-                    ) / 255.0
+                    img_resized = pil_img.resize((224, 224))
+                    img_arr = preprocess_input(np.array(img_resized).astype(np.float32))
+                    img_arr = np.expand_dims(img_arr, axis=0)
                     ml_score = float(model.predict(img_arr, verbose=0)[0][0])
                     ml_conf = 1.0 - ml_score
                     effective_score = analysis["total_score"]
@@ -1461,7 +1610,7 @@ async def submit_incident(
     type: str = Form(...),
     location: str = Form(...),
     severity: str = Form(default="moderate"),
-    notes: str = Form(default=""),           # <-- Changed to 'notes'
+    notes: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
     current_user: dict = Depends(get_current_user),
     db: Client = Depends(get_supabase),
@@ -1487,7 +1636,7 @@ async def submit_incident(
         "type": type,
         "location": location,
         "severity": severity,
-        "notes": notes,                      # <-- Changed to 'notes'
+        "notes": notes,
         "image_url": image_url,
         "reported_by": current_user["id"],
         "status": "pending",
@@ -1732,15 +1881,6 @@ async def health():
     }
 
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import os
-from dotenv import load_dotenv
-
-# 1. Load your environment variables
-load_dotenv()
-
-# 2. Check if we are in dev mode (defaults to False if not found)
 # =============================================================================
 # GUARDRAIL TESTING (MOCK INJECTION)
 # =============================================================================
@@ -1780,12 +1920,12 @@ def check_seismic_guardrail(lat, lon):
 @app.post("/api/verify-anomaly", tags=["Testing"])
 async def process_visual_anomaly(payload: AnomalyPayload):
     print(f"📸 Received visual anomaly: {payload.anomaly_type} ({payload.visual_confidence * 100}%)")
-    
+
     lat = payload.coordinates.lat
     lon = payload.coordinates.lon
-    
+
     seismic_check = check_seismic_guardrail(lat, lon)
-    
+
     if seismic_check["status"] == "verified" and payload.visual_confidence > 0.85:
         print("🚨 GUARDRAIL PASSED: Environmental data aligns with visual AI.")
         return {
@@ -1794,7 +1934,7 @@ async def process_visual_anomaly(payload: AnomalyPayload):
             "visual_data": payload.model_dump(),
             "environmental_verification": seismic_check["data"]
         }
-    
+
     return {
         "alert_authorized": False,
         "message": "Guardrail failed to verify the threat. Alert suppressed."
@@ -1807,4 +1947,3 @@ async def process_visual_anomaly(payload: AnomalyPayload):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
-
