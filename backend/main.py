@@ -1017,6 +1017,7 @@ async def fetch_global_quakes() -> None:
             print(f"⚠️ USGS fetch failed: {exc}")
         await asyncio.sleep(60)
 
+# FOR TESTING MOCK EARTHQUAKE
 # async def fetch_global_quakes() -> None:
 #     """Poll USGS every 60 s for magnitude 2.5+ earthquakes from the past day."""
 #     global recent_quakes

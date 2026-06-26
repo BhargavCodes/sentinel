@@ -72,7 +72,7 @@ const TECH_STACK = [
   {
     name:  "Supabase",
     role:  "PostgreSQL Database",
-    desc:  "Row-level incident lifecycle tracking. Users, incidents, and alert_log tables. All RBAC enforced at the FastAPI layer — no client-side trust.",
+    desc:  "Row-level incident lifecycle tracking. Users, incidents and alert_log tables. All RBAC enforced at the FastAPI layer — no client-side trust.",
     color: T.green,
     icon:  "🗄️",
   },
